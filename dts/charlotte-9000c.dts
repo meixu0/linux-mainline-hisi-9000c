@@ -1,0 +1,51 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Minimal HiSilicon Kirin 9000C ("charlotte") board.
+ *
+ * Boot chain on this device:
+ *   fastboot -> UEFI payload in a fake Android boot.img -> GRUB
+ *            -> Linux Image + this DTB
+ *
+ * The live firmware passes the UEFI memory map in /chosen, so the memory
+ * node below is only a fallback for direct non-EFI boot.  The firmware
+ * reserved regions are described in charlotte.dtsi.
+ */
+
+/dts-v1/;
+
+#include "charlotte.dtsi"
+
+/ {
+	model = "HUAWEI Kirin 9000C";
+	compatible = "hisilicon,charlotte";
+
+	aliases {
+		serial0 = &uart0;
+	};
+
+	chosen {
+		/*
+		 * Do not use the V500 earlycon by default: UART0 may not be
+		 * initialized by UEFI and earlycon polling can hang before the
+		 * framebuffer appears.  console=tty0 is the video path.
+		 * The V500 earlycon remains available for a UART-equipped
+		 * debug setup with earlycon=uart_v500,0xff894000.
+		 */
+		bootargs = "console=tty0 keep_bootcon loglevel=7";
+		stdout-path = &uart0;
+	};
+
+	memory@400000 {
+		device_type = "memory";
+		reg = <0x0 0x400000 0x0 0xbffa0000>;
+	};
+};
+
+/*
+ * UFS bring-up probe: enable the controller node so the scaffold driver can
+ * perform read-only register sanity checks.  Remove this override once the
+ * real HUF S port lands.
+ */
+&ufs {
+	status = "okay";
+};
