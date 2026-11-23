@@ -314,7 +314,7 @@ GRUB 默认项仍是 5.10，不受影响；测试项手动选最后一项。
 
 （本机 `~/9000c`）
 
-- `6.18-STATUS.md`（本文）
+- `status_zh.md`（本文）
 - `logs/6.18-uart-console-boot.log`：串口控制台成功启动 + 交互日志
 - `logs/6.18-diag-boot.log`：显示诊断启动日志（含 SError panic）
 - `earlycon.log` / `earlycon1.log`：更早的两次 6.18 启动日志

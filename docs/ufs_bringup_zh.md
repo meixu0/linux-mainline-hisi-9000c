@@ -501,7 +501,7 @@ root@(none):/# exit
 安全：默认只读 + `noload`，不改动 5.10 的 rootfs；`rw` 需显式指定。
 5.10 仍是 GRUB 默认项。
 
-详见 `6.18-patchset-and-rootfs-chroot.md`。
+详见 `rootfs_chroot_zh.md`。
 
 ## 4. 串口会话加固（本轮补）
 

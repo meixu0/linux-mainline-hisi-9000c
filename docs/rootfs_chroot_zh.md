@@ -93,7 +93,7 @@ CONFIG_EXT4_FS=y             # 挂载 sdd2 用
 
 ### 前提
 
-- 6.18 已经能枚举 UFS（`sda`..`sdd`），见 `ufs-bringup.md`。
+- 6.18 已经能枚举 UFS（`sda`..`sdd`），见 `ufs_bringup_zh.md`。
 - `CONFIG_EXT4_FS=y`：6.18 内核自带 ext4，可以直接挂载 `sdd2`。
 - `sdd2` 就是板子上安装的系统盘（GXDE OS 25 / Debian 系，ext4）。
 

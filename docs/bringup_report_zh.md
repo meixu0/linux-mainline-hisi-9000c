@@ -319,8 +319,8 @@ make ARCH=arm64 -j"$(nproc)" Image hisilicon/charlotte-9000c.dtb
 ### 本机文档与脚本（`~/9000c`）
 
 ```
-6.18-bringup-report.md                    # 本报告（权威版）
-6.18-STATUS.md                            # 过程记录/工作笔记（含更多中间数据）
+bringup_report_zh.md                    # 本报告（权威版）
+status_zh.md                            # 过程记录/工作笔记（含更多中间数据）
 logs/6.18-uart-console-boot.log           # 串口控制台成功启动 + 交互
 logs/6.18-diag-boot.log                   # 显示诊断（fbcon 像素统计 + SError）
 logs/6.18-dss-probe.log                   # 电源/时钟干净探测日志
