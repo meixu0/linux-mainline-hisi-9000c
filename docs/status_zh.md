@@ -453,15 +453,18 @@ dss-probe: aod vote after  = 0x15        # bit0 AP media1, bit2 AP vivobus, bit4
 每个字节只会被其中一个取走，两边日志都会"随机缺字"，看起来像内核丢字符。
 排查/取证前先 `pgrep -af ttyUSB` 确认只有一个读者。
 
-## 当前产物状态
+## 当前产物状态（2026-11-24 更新）
 
-- `/boot/linux-6.18-charlotte/Image`：**安全版**（串口控制台可用，无探测驱动，不含 DSS 探测代码）
-- `~/9000c/kernel-port/out/Image-6.18-probe`：带 DSS 探测的版本（每次启动会读 DPU 并 panic，仅用于实验）
-- `~/9000c/logs/6.18-dss-probe.log`：本轮干净探测日志
+- `/boot/linux-6.18-charlotte/Image`：PCIe0/SATA 可用版（`8247f40db86c917609d81daac7efa5ef`）
+- `/boot/linux-6.18-charlotte/Image.repotest`：本次仓库构建验证镜像
+  （`4690ec04b1a04b2183411104d17014ee`）
+- `/boot/linux-6.18-charlotte/Image.ufsworking`：早期 UFS 可用版（回滚用）
+- `docs/logs/6.18-dss-probe.log`：当时的 DPU 探测日志
 
-## 建议的后续路线（按性价比排序）
+## 建议的后续路线（2026-11-24 更新）
 
-1. **先做 UFS/根文件系统**，让 6.18 从真实磁盘启动 —— 这样 6.18 才算"可用"，显示可以后补。
+1. **PCIe1（x1 插槽）/ AMD 亮机卡**：先补 PMIC LDO16（`pcieSwitch`）电源，
+   再确认卡的 BAR 能否放进 59 MB 窗口；详见 `pci_amdgpu_zh.md`。
 2. 显示若要继续：先做 **5.10 vs 6.18 的 CRG 全量 diff**（5.10 有参考值，6.18 可读 `0xE8D01000`），
    确定哪些门控被关；再研究 LPM3 邮箱上电协议（或找到等效的 AOD 触发方式）。
 3. 最后才是 DPU + HDMI PHY 驱动（可直接复用厂商寄存器序列，但工作量最大）。
