@@ -2,10 +2,15 @@
 
 - 日期：2026-11-23
 - 目标机：QHW-100 / SP1PANGUXM（DMI: Dalian Guoxun QHW-100），BIOS 1.00.07 04/16/2025
-- 远端：`builder@<board-lan>`，工作目录 `~/9000c`
+- 远端：板端主机（串口 + 局域网 SSH），工作目录 `~/9000c`
 - 自建内核：Linux 6.18.0（`charlotte_defconfig`，源码 `~/9000c/kernel-port/linux-6.18`）
 - 对照内核：厂商 `5.10.97-38-9000c`（Android BSP 派生）
 - 串口：`/dev/ttyUSB0`（CH340），115200 8N1
+
+> **更新（2026-11-24）**：本报告写于 2026-11-23，当时 UFS/PCIe/amdgpu 均未开始。
+> 后续进展：UFS 已完成（HS-G4）、PCIe0（板载 SATA）已打通、amdgpu 已编入 6.18。
+> 详见 `ufs_bringup_zh.md`、`pci_amdgpu_zh.md`、`build_verification_zh.md`。
+> 仍未完成：PCIe1（x1 插槽）电源与 AMD 卡验证、显示（厂商 DPU）。
 
 ---
 
@@ -16,10 +21,14 @@
 | 1 | 6.18 只起来 4 个 CPU | **已解决** | 启动核声明 PAC、其余核不声明，`ARM64_HAS_ADDRESS_AUTH` 冲突。加 `arm64.nopauth` 后 8c12t（12 个逻辑 CPU）全可用。 |
 | 2 | 6.18 无显示（黑屏、显示器报无信号） | **已定位，未修复** | 固件交接时关掉了整个显示子系统；6.18 没有对应的电源/时钟/DPU 驱动。efifb 写显存有效但无人扫描输出。 |
 | 3 | 没有可用的调试通道 | **已解决** | 新增 V500 UART 驱动，`ttyHW0` 双向控制台可用（并修好了 RX 32 字节门限与 TX 丢字）。 |
-| 4 | 根文件系统 / 存储 | 未开始 | UFS（`hufs`）未移植，6.18 目前只跑 initramfs。 |
+| 4 | 根文件系统 / 存储 | **已解决** | UFS（HUF S）已移植：`sda`/`sdb` 4MiB、`sdc` 480MiB、`sdd` 238GiB（43 分区），HS-G4 / 2 lanes，读约 931 MB/s。 |
+| 5 | PCIe | **已解决（PCIe0）** | 板载 ASM1064 SATA 训练到 Gen3 x1，`ahci` 正常；x1 插槽（PCIe1）待 LDO16 电源。 |
+| 6 | amdgpu | **已编入** | 6.18 内置 `CONFIG_DRM_AMDGPU=y`，需要 AMD 卡 + PCIe1 电源才能实际出图。 |
 
-**当前机器状态**：运行 5.10；6.18 测试项已安装且为**安全版**（串口控制台可用、无会 panic 的探测代码）；
-GRUB 默认项仍是 5.10。串口上没有任何后台占用，可直接用 picocom。
+**当前机器状态（2026-11-24）**：默认仍运行 5.10；6.18 测试项为 PCIe 可用版
+（`/boot/linux-6.18-charlotte/Image`，md5 `8247f40db86c917609d81daac7efa5ef`）。
+本次仓库构建验证的镜像保留为 `Image.repotest`（md5 `4690ec04b1a04b2183411104d17014ee`）。
+GRUB 默认项仍是 5.10，6.18 通过 `grub-reboot` 一次性进入。
 
 ---
 
@@ -278,17 +287,18 @@ make ARCH=arm64 -j"$(nproc)" Image hisilicon/charlotte-9000c.dtb
 
 ## 八、已知限制
 
-- 6.18 目前只跑 initramfs，无磁盘、无网络、无显示。
+- 6.18 已能枚举 UFS 磁盘（`sda`..`sdd`）并从 sdd2 chroot；PCIe0 + 板载 SATA 可用；仍无网络和显示（initramfs 没有网络驱动）。
 - 无 USB 键盘/鼠标输入到 shell 的通道（只能用串口）。
 - 显示相关探测读 DPU 会触发 SError panic（`panic=20` 可自动恢复）；**当前安装的 Image 不含该探测代码**。
-- 6.18 的 DT 仍是最小集：只有 CPU/GIC/timer/UART/少量内存描述；时钟/电源/PMIC/UFS/显示均未描述。
+- 6.18 的 DT 已包含 CPU/GIC/timer/UART/UFS/PCIe0/PCIe1 节点；PMIC、显示和网络仍未描述。
 
 ---
 
 ## 九、后续路线（按性价比排序）
 
-1. **UFS / 根文件系统**（建议优先）
-   厂商 `hufs_hcd / hufs_plat / hufs_mphy`（见 `TODO-UFS.md`）。打通后 6.18 才能从真实磁盘启动、长期运行。
+1. **PCIe1（x1 插槽）/ AMD 亮机卡**（当前主线）
+   先补 PMIC `LDO16`（`pcieSwitch`，2.5V）电源，保证空槽时 link down 不 panic；
+   插卡后先确认 VRAM BAR 能否放进 59 MB 的窗口。详见 `pci_amdgpu_zh.md`。
 
 2. **显示：电源/时钟**
    - 先做 5.10 vs 6.18 的 **CRG 全量 diff**（5.10 有参考值，6.18 的 `0xE8D01000` 可读），确定哪些门控被关。

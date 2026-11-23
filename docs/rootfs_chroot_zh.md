@@ -201,10 +201,12 @@ root@(none):/# exit
 
 ## 4. 当前产物
 
-| 产物                                       | 位置                                                     | md5                                |
-| ---------------------------------------- | ------------------------------------------------------ | ---------------------------------- |
-| 6.18 内核（dev_dbg 版，UFS 可用）                | `/boot/linux-6.18-charlotte/Image`                     | `aeab4f60a8ad6ba50d49a6ebba77558b` |
-| 同上的存档                                    | `/boot/linux-6.18-charlotte/Image.ufsworking`          | 同上                                 |
+| 产物 | 位置 | md5 |
+|---|---|---|
+| 6.18 内核（PCIe0/SATA 可用，当前默认测试镜像） | `/boot/linux-6.18-charlotte/Image` | `8247f40db86c917609d81daac7efa5ef` |
+| 仓库构建验证镜像 | `/boot/linux-6.18-charlotte/Image.repotest` | `4690ec04b1a04b2183411104d17014ee` |
+| 验证前镜像备份 | `/boot/linux-6.18-charlotte/Image.before-repotest` | `8247f40db86c917609d81daac7efa5ef` |
+| 早期 UFS 可用镜像 | `/boot/linux-6.18-charlotte/Image.ufsworking` | `aeab4f60a8ad6ba50d49a6ebba77558b` |
 | 6.18 initramfs（含 sdd2-chroot、respawn 循环） | `/boot/linux-6.18-charlotte/initramfs-console.cpio.gz` | `7ab07e420283f07a9cfb2e596f780d07` |
-| 回滚镜像                                     | `/boot/linux-6.18-charlotte/Image.safe`                | 未改动                                |
-| 补丁集                                      | `~/9000c/kernel-port/patches/`、本机 `~/9000c/patches/`   | —                                  |
+| 回滚镜像 | `/boot/linux-6.18-charlotte/Image.safe` | 未改动 |
+| 补丁集（权威） | `linux-mainline-hisi-9000c/patches/` | — |

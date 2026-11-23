@@ -1,10 +1,13 @@
 # HUAWEI Kirin 9000C（charlotte / QHW-100）Linux 6.18 bring-up 状态与诊断记录
 
 - 日期：2026-11-23
-- 目标机：`builder@<board-lan>`（Dalian Guoxun QHW-100 / SP1PANGUXM，BIOS 1.00.07 04/16/2025）
+- 目标机：QHW-100 / SP1PANGUXM（DMI: Dalian Guoxun QHW-100），BIOS 1.00.07 04/16/2025（串口 + 局域网 SSH 访问）
 - 运行内核：`6.18.0 #8 SMP`（自建，`charlotte_defconfig`）
 - 对照内核：厂商 `5.10.97-38-9000c`（Android BSP 派生）
 - 本机串口：`/dev/ttyUSB0`（CH340，115200 8N1）
+
+> **历史记录（2026-11-23）**：本文是 UFS/PCIe 尚未开始时的过程记录，部分结论已被后续工作取代。
+> 最新状态请看 `../README.md`、`bringup_report_zh.md`、`pci_amdgpu_zh.md` 和 `build_verification_zh.md`。
 
 ---
 
@@ -15,7 +18,7 @@
 | 6.18 只能启动 4 个 CPU | **已修复** | 启动 CPU 声明 PAC/QARMA5，其余核不声明，`ARM64_HAS_ADDRESS_AUTH`（capability 5）冲突导致 CPU4-11 被杀。加 `arm64.nopauth` 后 8c12t（12 个逻辑 CPU）全可用。 |
 | 6.18 无显示（黑屏） | **已定位，未修复** | 固件在交接（ExitBootServices）时关掉了整个 DPU + HDMI 输出；6.18 没有该显示控制器驱动，efifb 只是往显存写，没人扫描输出。显示器直接报“无信号”。 |
 | 没有可用的早期调试通道 | **已解决** | 新增 V500 UART 驱动，`ttyHW0` 控制台可双向交互（`console=ttyHW0,115200n8`）。 |
-| 根文件系统 / 存储 | 未开始 | UFS（`hufs`）驱动未移植，当前 6.18 只跑 initramfs。 |
+| 根文件系统 / 存储 | **已完成（2026-11-24）** | UFS（HUF S）已移植，`sda`..`sdd` 可用，HS-G4 / 2 lanes；详见 `ufs_bringup_zh.md`。 |
 
 ---
 
@@ -287,7 +290,7 @@ GRUB 默认项仍是 5.10，不受影响；测试项手动选最后一项。
 
 ### B. UFS / 根文件系统
 
-厂商 `hufs_hcd / hufs_plat / hufs_mphy`（见 `TODO-UFS.md`），打通后才能从真实根分区启动 6.18。
+UFS 已完成，见 `ufs_bringup_zh.md`；当前待办只剩 PCIe1 插槽电源和显示（见 `pci_amdgpu_zh.md`）。
 
 ### C. 小修（可顺手做）
 

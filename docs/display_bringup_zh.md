@@ -1,5 +1,8 @@
 # 6.18 显示 bring-up：侦察结果与分阶段计划
 
+> 状态（2026-11-24）：显示仍未点亮。作为替代路线，PCIe + AMD 亮机卡的方案已经打通
+> （见 `pci_amdgpu_zh.md`）；本文保留 DPU/HDMI 的分析和后续计划。
+
 ## 1. 5.10 现状
 
 - 图形栈是 **DRM**（`/dev/dri/card0` + `renderD128`），**没有 fbdev**（`/proc/fb` 为空）。

@@ -12,6 +12,9 @@ re-checked.
 | `6.18-sdd2-chroot-final.log` | initramfs `sdd2-chroot` into GXDE OS 25 and `uname -r` inside |
 | `6.18-repotest-boot.log` | kernel rebuilt from this repository (upstream v6.18 + patches + defconfig) booting on the board |
 
+The `Linux version ...` banner in the logs contains the local build account
+(`user@host`); it is a build identity, not a credential.
+
 Capture command (the port is single-reader):
 
 ```sh
