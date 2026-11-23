@@ -1,4 +1,4 @@
-name: build-charlotte-6.18
+name: build-hisi-9000c-6.18
 
 on:
   push:
@@ -53,6 +53,6 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: charlotte-6.18
+          name: hisi-9000c-6.18
           path: out/
           if-no-files-found: error
