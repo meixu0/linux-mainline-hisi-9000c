@@ -1,0 +1,75 @@
+From 4864af34aacacbbd18b63339834bb2718189de32 Mon Sep 17 00:00:00 2001
+From: charlotte bring-up <bringup@localhost>
+Date: Tue, 24 Nov 2026 00:48:12 +0800
+Subject: [PATCH 2/6] tty: serial: add uart_v500 serial console driver
+
+Add a driver for the Huawei V500 UART found on Kirin 9000C platforms.
+The controller is a simple 32-bit register UART (THR/RBR at +0x00, LSR at
++0x14, IER at +0x04) that is not covered by 8250 because the register
+layout differs.
+
+Both a normal console/tty driver and an earlycon implementation are
+provided; the 6.18 bring-up uses them as its only console:
+
+    earlycon=uart_v500,0xff894000 console=ttyHW0,115200n8
+
+Signed-off-by: charlotte bring-up <bringup@localhost>
+---
+ drivers/tty/serial/Kconfig  | 31 +++++++++++++++++++++++++++++++
+ drivers/tty/serial/Makefile |  2 ++
+ 2 files changed, 33 insertions(+)
+
+diff --git a/drivers/tty/serial/Kconfig b/drivers/tty/serial/Kconfig
+index 2821167..8998794 100644
+--- a/drivers/tty/serial/Kconfig
++++ b/drivers/tty/serial/Kconfig
+@@ -1621,5 +1621,36 @@ config SERIAL_ESP32_ACM
+ 
+ endmenu
+ 
++config SERIAL_UART_V500
++	tristate "HiSilicon UART V500 serial port support"
++	depends on ARCH_HISI || COMPILE_TEST
++	select SERIAL_CORE
++	help
++	  Serial port driver for the HiSilicon UART V500 IP found on the
++	  Kirin 9000C (charlotte).  PIO based, no DMA support.
++
++config SERIAL_UART_V500_CONSOLE
++	bool "Console on HiSilicon UART V500 serial port"
++	depends on SERIAL_UART_V500=y
++	select SERIAL_CORE_CONSOLE
++	help
++	  Say Y here if you want to use the HiSilicon UART V500 as a
++	  console.  Use console=ttyHW0,115200n8 on the kernel command line.
++
++config SERIAL_UART_V500_EARLYCON
++	bool "HiSilicon UART V500 earlycon"
++	depends on ARCH_HISI
++	select SERIAL_CORE
++	select SERIAL_CORE_CONSOLE
++	select SERIAL_EARLYCON
++	default y
++	help
++	  Early console for the HiSilicon UART V500 found on Kirin
++	  charlotte/Kirin 9000C.  The bootloader must have configured the
++	  UART; this driver only polls the TX FIFO and writes characters.
++
++	  Use earlycon=uart_v500,<address> on the kernel command line, or
++	  point chosen/stdout-path at a hisilicon,uart node.
++
+ config SERIAL_MCTRL_GPIO
+ 	tristate
+diff --git a/drivers/tty/serial/Makefile b/drivers/tty/serial/Makefile
+index a2ccbc5..133cb3e 100644
+--- a/drivers/tty/serial/Makefile
++++ b/drivers/tty/serial/Makefile
+@@ -9,6 +9,8 @@ serial_base-y := serial_core.o serial_base_bus.o serial_ctrl.o serial_port.o
+ obj-$(CONFIG_SERIAL_EARLYCON) += earlycon.o
+ obj-$(CONFIG_SERIAL_EARLYCON_SEMIHOST) += earlycon-semihost.o
+ obj-$(CONFIG_SERIAL_EARLYCON_RISCV_SBI) += earlycon-riscv-sbi.o
++obj-$(CONFIG_SERIAL_UART_V500) += uart-v500.o
++obj-$(CONFIG_SERIAL_UART_V500_EARLYCON) += uart-v500-earlycon.o
+ 
+ # These Sparc drivers have to appear before others such as 8250
+ # which share ttySx minor node space.  Otherwise console device

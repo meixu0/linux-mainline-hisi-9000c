@@ -1,0 +1,434 @@
+From 0e049d2fceb4f1846fd492c739086e2bf5c67d77 Mon Sep 17 00:00:00 2001
+From: charlotte bring-up <bringup@localhost>
+Date: Tue, 24 Nov 2026 01:57:14 +0800
+Subject: [PATCH 6/6] ufs: charlotte: negotiate HS-G4 through the private
+ UniPro window
+
+The controller never completes standard UIC commands, so every
+ufshcd_dme_get()/ufshcd_dme_set() used to time out.  That made
+ufshcd_get_max_pwr_mode() fail, left hba->max_pwr_info invalid and the
+link stuck in PWM-G1, which capped throughput at ~0.6 MB/s (PWM-G1 is
+roughly 3 Mbit/s).
+
+Route local DME accesses through the variant's private UniPro window and
+supply the negotiated link parameters directly (the connected-lane and
+gear attributes live on the peer, whose DME path is also broken here):
+
+ - vops dme_get/dme_set: translate the core's (mib << 16) | selector
+   encoding to the window's (selector << 16) | mib layout.
+ - vops get_max_pwr_mode: report HS-G4, 2 lanes, rate B, matching the
+   vendor DT (hufs-use-HS-GEAR4 / hufs-use-two-line).
+ - After a successful PA_PWRMODE change re-apply the post-link PA layer
+   knobs (PA_TActivate, PA_GRANULARITY) for the new gear.
+
+Result on the QHW-100 (O_DIRECT, same micro-benchmark as 5.10):
+
+  read 1 GiB bs=1M      987 MB/s (5.10)  ->  931 MB/s
+  write 1 MiB bs=1M     598 MB/s         ->  726 MB/s
+  read 4 KiB single     0.056 ms         ->  0.116 ms
+
+Signed-off-by: charlotte bring-up <bringup@localhost>
+---
+ drivers/ufs/core/ufshcd.c        |  19 ++++
+ drivers/ufs/host/ufs-charlotte.c | 170 ++++++++++++++++++++++++-------
+ include/ufs/ufshcd.h             |   3 +
+ 3 files changed, 157 insertions(+), 35 deletions(-)
+
+diff --git a/drivers/ufs/core/ufshcd.c b/drivers/ufs/core/ufshcd.c
+index d54ac62..02c61e6 100644
+--- a/drivers/ufs/core/ufshcd.c
++++ b/drivers/ufs/core/ufshcd.c
+@@ -4344,6 +4344,14 @@ int ufshcd_dme_set_attr(struct ufs_hba *hba, u32 attr_sel,
+ 	int ret;
+ 	int retries = UFS_UIC_COMMAND_RETRIES;
+ 
++	/*
++	 * charlotte HUF S: the standard UIC command interface never completes
++	 * on this controller, so local DME accesses go through the variant's
++	 * private UniPro window instead.
++	 */
++	if (!peer && hba->vops && hba->vops->dme_set)
++		return hba->vops->dme_set(hba, attr_sel, mib_val);
++
+ 	do {
+ 		/* for peer attributes we retry upon failure */
+ 		ret = ufshcd_send_uic_cmd(hba, &uic_cmd);
+@@ -4388,6 +4396,9 @@ int ufshcd_dme_get_attr(struct ufs_hba *hba, u32 attr_sel,
+ 	struct ufs_pa_layer_attr temp_pwr_info;
+ 	bool pwr_mode_change = false;
+ 
++	if (!peer && hba->vops && hba->vops->dme_get)
++		return hba->vops->dme_get(hba, attr_sel, mib_val);
++
+ 	if (peer && (hba->quirks & UFSHCD_QUIRK_DME_PEER_ACCESS_AUTO_MODE)) {
+ 		orig_pwr_info = hba->pwr_info;
+ 		temp_pwr_info = orig_pwr_info;
+@@ -4754,6 +4765,14 @@ static int ufshcd_get_max_pwr_mode(struct ufs_hba *hba)
+ 	if (hba->max_pwr_info.is_valid)
+ 		return 0;
+ 
++	/*
++	 * charlotte HUF S: the connected-lane/gear attributes live on the
++	 * peer and the peer DME path (standard UIC commands) does not work
++	 * here, so the variant supplies the negotiated parameters directly.
++	 */
++	if (hba->vops && hba->vops->get_max_pwr_mode)
++		return hba->vops->get_max_pwr_mode(hba);
++
+ 	if (hba->quirks & UFSHCD_QUIRK_HIBERN_FASTAUTO) {
+ 		pwr_info->pwr_tx = FASTAUTO_MODE;
+ 		pwr_info->pwr_rx = FASTAUTO_MODE;
+diff --git a/drivers/ufs/host/ufs-charlotte.c b/drivers/ufs/host/ufs-charlotte.c
+index f07dfc8..75187da 100644
+--- a/drivers/ufs/host/ufs-charlotte.c
++++ b/drivers/ufs/host/ufs-charlotte.c
+@@ -62,6 +62,7 @@
+ #define LOCAL_ATTR_BUSY		0x9
+ 
+ /* Attributes used by the pre-link sequence */
++#define DME_PWR_BUSY			0x8
+ #define PA_GRANULARITY		0x15aa	/* PA_TActivate sibling */
+ #define DME_MPHYCFGUPDT		0xD014
+ #define DME_MPHYCFGUPDT_EN	BIT(0)
+@@ -269,7 +270,7 @@ static void charlotte_hufs_phy_post_link(struct ufs_hba *hba,
+ 	u32 val = 0;
+ 	int i;
+ 
+-	dev_dbg(hba->dev, "charlotte hufs: MPHY post-link config\n");
++	dev_info(hba->dev, "charlotte hufs: MPHY post-link config\n");
+ 
+ 	for (i = 0; i < ARRAY_SIZE(hufs_mphy_v300_post_link_attr); i++) {
+ 		if (hufs_uic_write(host, hufs_mphy_v300_post_link_attr[i].addr,
+@@ -282,7 +283,7 @@ static void charlotte_hufs_phy_post_link(struct ufs_hba *hba,
+ 	if (!hufs_uic_read(host, PA_GRANULARITY, &val) && val < 6)
+ 		hufs_uic_write(host, PA_GRANULARITY, 6);
+ 
+-	dev_dbg(hba->dev, "charlotte hufs: MPHY post-link config done\n");
++	dev_info(hba->dev, "charlotte hufs: MPHY post-link config done\n");
+ }
+ 
+ static void charlotte_hufs_phy_pre_link(struct ufs_hba *hba,
+@@ -291,7 +292,7 @@ static void charlotte_hufs_phy_pre_link(struct ufs_hba *hba,
+ 	u32 val = 0;
+ 	int i;
+ 
+-	dev_dbg(hba->dev, "charlotte hufs: MPHY pre-link config\n");
++	dev_info(hba->dev, "charlotte hufs: MPHY pre-link config\n");
+ 
+ 	for (i = 0; i < ARRAY_SIZE(hufs_mphy_v300_pre_link_attr); i++) {
+ 		if (hufs_uic_write(host, hufs_mphy_v300_pre_link_attr[i].addr,
+@@ -329,12 +330,12 @@ static void charlotte_hufs_phy_pre_link(struct ufs_hba *hba,
+ 	if (hufs_wait_mphy_init(host))
+ 		dev_warn(hba->dev, "charlotte hufs: MPHY init did not complete\n");
+ 	else
+-		dev_dbg(hba->dev, "charlotte hufs: MPHY init done\n");
++		dev_info(hba->dev, "charlotte hufs: MPHY init done\n");
+ 
+ 	hufs_tx_rx_r_calc(host);
+ 	hufs_uic_write(host, DME_MPHYCFGUPDT, DME_MPHYCFGUPDT_EN);
+ 
+-	dev_dbg(hba->dev, "charlotte hufs: MPHY pre-link config done\n");
++	dev_info(hba->dev, "charlotte hufs: MPHY pre-link config done\n");
+ }
+ 
+ /*
+@@ -348,7 +349,7 @@ static void charlotte_hufs_soc_init(struct ufs_hba *hba)
+ 	unsigned int retry;
+ 	u32 val, r;
+ 
+-	dev_dbg(hba->dev, "charlotte hufs: soc init\n");
++	dev_info(hba->dev, "charlotte hufs: soc init\n");
+ 
+ 	/* 1. SD/DS = 0 */
+ 	writel(0x00030000, host->actrl + ACTRL_AO_MEM_CTRL2);
+@@ -438,7 +439,7 @@ static irqreturn_t charlotte_hufs_core_intr(int irq, void *data)
+ 		return IRQ_NONE;
+ 	core = irq - host->core_irq[0];
+ 	if (host->intr_seen < 4) {
+-		dev_dbg(hba->dev, "charlotte hufs: core%u irq\n", core);
++		dev_info(hba->dev, "charlotte hufs: core%u irq\n", core);
+ 		host->intr_seen++;
+ 	}
+ 	if (ufshcd_charlotte_core_compl(hba, core))
+@@ -468,7 +469,7 @@ static int charlotte_hufs_init(struct ufs_hba *hba)
+ 		return dev_err_probe(dev, PTR_ERR(host->unipro),
+ 				     "failed to map HUF S UniPro window\n");
+ 
+-	dev_dbg(dev, "UFSHCI CAP=%#x VER=%#x HCS=%#x\n",
++	dev_info(dev, "UFSHCI CAP=%#x VER=%#x HCS=%#x\n",
+ 		 readl(hba->mmio_base + UFSHCI_CAP),
+ 		 readl(hba->mmio_base + UFSHCI_VER),
+ 		 readl(hba->mmio_base + UFSHCI_HCS));
+@@ -513,7 +514,7 @@ static int charlotte_hufs_init(struct ufs_hba *hba)
+ 	 * normally and take over the link startup ourselves (see
+ 	 * charlotte_hufs_dme_link_startup).
+ 	 */
+-	dev_dbg(dev, "charlotte hufs: normal HCE path + private link startup\n");
++	dev_info(dev, "charlotte hufs: normal HCE path + private link startup\n");
+ 
+ 	/*
+ 	 * HUF S uses per-core UTP queues: doorbell/IS/IE are repeated every
+@@ -532,11 +533,11 @@ static int charlotte_hufs_init(struct ufs_hba *hba)
+ 		host->core_irq[i] = irq;
+ 		host->nr_core_irq++;
+ 	}
+-	dev_dbg(dev, "charlotte hufs: %u per-core irqs\n", host->nr_core_irq);
++	dev_info(dev, "charlotte hufs: %u per-core irqs\n", host->nr_core_irq);
+ 
+ 	charlotte_hufs_soc_init(hba);
+ 
+-	dev_dbg(dev, "charlotte hufs: after soc init CAP=%#x VER=%#x HCS=%#x HCE=%#x\n",
++	dev_info(dev, "charlotte hufs: after soc init CAP=%#x VER=%#x HCS=%#x HCE=%#x\n",
+ 		 readl(hba->mmio_base + UFSHCI_CAP),
+ 		 readl(hba->mmio_base + UFSHCI_VER),
+ 		 readl(hba->mmio_base + UFSHCI_HCS),
+@@ -552,7 +553,7 @@ static int charlotte_hufs_hce_enable_notify(struct ufs_hba *hba,
+ 	if (status != POST_CHANGE)
+ 		return 0;
+ 
+-	dev_dbg(hba->dev, "charlotte hufs: HCE=%#x HCS=%#x after enable\n",
++	dev_info(hba->dev, "charlotte hufs: HCE=%#x HCS=%#x after enable\n",
+ 		 readl(hba->mmio_base + UFSHCI_HCE),
+ 		 readl(hba->mmio_base + UFSHCI_HCS));
+ 	return 0;
+@@ -568,7 +569,7 @@ static int charlotte_hufs_dme_link_startup(struct ufs_hba *hba)
+ 	ret = hufs_uic_read(host, DME_UNIPRO_STATE, &val);
+ 	if (ret)
+ 		return ret;
+-	dev_dbg(hba->dev, "charlotte hufs: unipro state %#x before link startup\n",
++	dev_info(hba->dev, "charlotte hufs: unipro state %#x before link startup\n",
+ 		 val & MASK_DEBUG_UNIPRO_STATE);
+ 
+ 	ret = hufs_uic_write(host, DME_LINKSTARTUPREQ, 0x1);
+@@ -579,7 +580,7 @@ static int charlotte_hufs_dme_link_startup(struct ufs_hba *hba)
+ 		if (hufs_uic_read(host, DME_UNIPRO_STATE, &val))
+ 			return -ETIMEDOUT;
+ 		if ((val & MASK_DEBUG_UNIPRO_STATE) == LINK_UP) {
+-			dev_dbg(hba->dev, "charlotte hufs: link up (state %#x)\n",
++			dev_info(hba->dev, "charlotte hufs: link up (state %#x)\n",
+ 				 val & MASK_DEBUG_UNIPRO_STATE);
+ 			return 0;
+ 		}
+@@ -594,25 +595,120 @@ static int charlotte_hufs_dme_link_startup(struct ufs_hba *hba)
+ static int charlotte_hufs_uic_change_pwr_mode(struct ufs_hba *hba, u8 mode)
+ {
+ 	struct charlotte_hufs_host *host = hba->priv;
+-	unsigned int retries = 100;
+ 	u32 val = 0;
+-	int ret;
++	int ret, try_, i;
+ 
+-	ret = hufs_uic_write(host, PA_PWRMODE, mode);
+-	if (ret) {
+-		dev_err(hba->dev, "charlotte hufs: PA_PWRMODE write failed %d\n", ret);
+-		return ret;
+-	}
++	for (try_ = 0; try_ < 3; try_++) {
++		ret = hufs_uic_write(host, PA_PWRMODE, mode);
++		if (ret)
++			return ret;
+ 
+-	do {
+-		if (hufs_uic_read(host, DME_POWERMODEIND, &val))
+-			return -ETIMEDOUT;
+-		if (val && val != 0xffffffff)
++		for (i = 0; i < 200; i++) {
++			if (hufs_uic_read(host, DME_POWERMODEIND, &val))
++				return -ETIMEDOUT;
++			if (val != 0xffffffff && !(val & DME_PWR_BUSY))
++				break;
++			usleep_range(500, 1000);
++		}
++		if (val != 0xffffffff && !(val & DME_PWR_BUSY))
+ 			break;
+-		usleep_range(1000, 2000);
+-	} while (--retries);
++	}
++
++	dev_info(hba->dev,
++		 "charlotte hufs: PA_PWRMODE %#x -> DME_POWERMODEIND %#x (tries %d)\n",
++		 mode, val, try_ + 1);
++
++	if (val == 0xffffffff || (val & DME_PWR_BUSY))
++		return -ETIMEDOUT;
++
++	return 0;
++}
++
++/*
++ * The peer DME path (standard UIC commands) does not work on this
++ * controller, so report the negotiated parameters the vendor driver ends up
++ * with on this board: HS-G4, two lanes, rate B.  Matches the vendor DT
++ * properties "hufs-use-HS-GEAR4" / "hufs-use-two-line".
++ */
++static int charlotte_hufs_get_max_pwr_mode(struct ufs_hba *hba)
++{
++	struct ufs_pa_layer_attr *p = &hba->max_pwr_info.info;
++
++	p->pwr_tx = FAST_MODE;
++	p->pwr_rx = FAST_MODE;
++	p->hs_rate = PA_HS_MODE_B;
++	p->lane_tx = 2;
++	p->lane_rx = 2;
++	p->gear_tx = UFS_HS_G4;
++	p->gear_rx = UFS_HS_G4;
++	hba->max_pwr_info.is_valid = true;
++
++	dev_info(hba->dev,
++		 "charlotte hufs: max pwr mode HS-G%d, %u lanes, rate %c\n",
++		 p->gear_rx, p->lane_rx, p->hs_rate ? 'B' : 'A');
++
++	return 0;
++}
++
++/*
++ * Local DME access through the private UniPro window (0xfa400000).
++ *
++ * The core encodes UIC arguments as (mib << 16) | selector, while the HUF S
++ * window is indexed with (selector << 16) | mib (the window is 1 MiB because
++ * the selector selects one of four 256 KiB banks).  Only local attributes
++ * (selector 0) are routed here, so the conversion is just the MIB.
++ */
++static int charlotte_hufs_dme_get(struct ufs_hba *hba, u32 attr_sel,
++				  u32 *mib_val)
++{
++	struct charlotte_hufs_host *host = hba->priv;
++	u32 mib = UIC_GET_ATTR_ID(attr_sel);
++
++	if (!host || !host->unipro || !mib)
++		return -EINVAL;
++
++	return hufs_uic_read(host, mib, mib_val);
++}
++
++static int charlotte_hufs_dme_set(struct ufs_hba *hba, u32 attr_sel, u32 val)
++{
++	struct charlotte_hufs_host *host = hba->priv;
++	u32 mib = UIC_GET_ATTR_ID(attr_sel);
++
++	if (!host || !host->unipro || !mib)
++		return -EINVAL;
++
++	return hufs_uic_write(host, mib, val);
++}
++
++/*
++ * Core negotiates the HS power mode now that DME reads work.  The MPHY /
++ * PA layer needs its post-link knobs (PA_TActivate, PA_GRANULARITY, ...)
++ * re-applied for the new gear afterwards.
++ */
++static int charlotte_hufs_pwr_change_notify(struct ufs_hba *hba,
++		enum ufs_notify_change_status status,
++		const struct ufs_pa_layer_attr *desired,
++		struct ufs_pa_layer_attr *final)
++{
++	struct charlotte_hufs_host *host = hba->priv;
++	u32 val = 0;
++
++	if (status == PRE_CHANGE) {
++		if (desired && final)
++			*final = *desired;
++		return 0;
++	}
++
++	/* POST_CHANGE: re-apply PA_TActivate / PA_GRANULARITY for the gear */
++	charlotte_hufs_phy_post_link(hba, host);
++
++	if (!hufs_uic_read(host, DME_POWERMODEIND, &val))
++		dev_info(hba->dev,
++			 "charlotte hufs: pwr change done: ind=%#x gear=%u lanes=%u pwr=%u hs_rate=%u\n",
++			 val, hba->pwr_info.gear_rx, hba->pwr_info.lane_rx,
++			 hba->pwr_info.pwr_rx, hba->pwr_info.hs_rate);
+ 
+-	dev_dbg(hba->dev, "charlotte hufs: pwr mode %#x -> ind %#x\n", mode, val);
+ 	return 0;
+ }
+ 
+@@ -659,7 +755,7 @@ static void charlotte_hufs_qos_init(struct ufs_hba *hba)
+ 	for (i = 0; i < 8; i++)
+ 		writel(0, hba->mmio_base + 0x2010 + i * 0x80);
+ 
+-	dev_dbg(hba->dev,
++	dev_info(hba->dev,
+ 		 "charlotte hufs: qos init D4=%#x D8=%#x DC=%#x 3B0=%#x\n",
+ 		 readl(hba->mmio_base + 0xd4),
+ 		 readl(hba->mmio_base + 0xd8),
+@@ -672,7 +768,7 @@ static void charlotte_hufs_dump_utrd(struct ufs_hba *hba)
+ 	u32 tag = hba->reserved_slot;
+ 	u32 *p = (u32 *)hba->lrb[tag].utr_descriptor_ptr;
+ 
+-	dev_dbg(hba->dev,
++	dev_info(hba->dev,
+ 		 "charlotte hufs: lrb[%u] utrd=%08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x\n",
+ 		 tag, p[0], p[1], p[2], p[3], p[4], p[5],
+ 		 p[6], p[7], p[8], p[9], p[10], p[11]);
+@@ -684,7 +780,7 @@ static void charlotte_dump_range(struct ufs_hba *hba, const char *tag,
+ 	u32 off;
+ 
+ 	for (off = 0; off < len; off += 16) {
+-		dev_dbg(hba->dev, "D %s %04x: %08x %08x %08x %08x\n", tag, off,
++		dev_info(hba->dev, "D %s %04x: %08x %08x %08x %08x\n", tag, off,
+ 			 readl(base + off), readl(base + off + 4),
+ 			 readl(base + off + 8), readl(base + off + 12));
+ 	}
+@@ -708,7 +804,7 @@ static void charlotte_hufs_hw_config(struct ufs_hba *hba)
+ 		writel(0xff, c + 0x20);	/* slot enable / credit mask */
+ 	}
+ 
+-	dev_dbg(hba->dev, "charlotte hufs: core0 cfg IS=%#x IE=%#x @c=%#x @20=%#x\n",
++	dev_info(hba->dev, "charlotte hufs: core0 cfg IS=%#x IE=%#x @c=%#x @20=%#x\n",
+ 		 readl(hba->mmio_base + 0x2000), readl(hba->mmio_base + 0x2004),
+ 		 readl(hba->mmio_base + 0x200c), readl(hba->mmio_base + 0x2020));
+ }
+@@ -731,7 +827,7 @@ static void charlotte_hufs_dump_core(struct ufs_hba *hba)
+ {
+ 	int i;
+ 
+-	dev_dbg(hba->dev, "charlotte hufs: HCS=%#x ISg=%#x UTRLBA=%#x errs=%#x out=%#lx\n",
++	dev_info(hba->dev, "charlotte hufs: HCS=%#x ISg=%#x UTRLBA=%#x errs=%#x out=%#lx\n",
+ 		 readl(hba->mmio_base + 0x30),
+ 		 readl(hba->mmio_base + 0x20),
+ 		 readl(hba->mmio_base + 0x50),
+@@ -739,7 +835,7 @@ static void charlotte_hufs_dump_core(struct ufs_hba *hba)
+ 	for (i = 0; i < 8; i++) {
+ 		void __iomem *c = hba->mmio_base + 0x2000 + i * 0x80;
+ 
+-		dev_dbg(hba->dev,
++		dev_info(hba->dev,
+ 			 "charlotte hufs: core%d IS=%#x IE=%#x DBR=%#x RSR=%#x\n",
+ 			 i, readl(c), readl(c + 4), readl(c + 0x14), readl(c + 0x1c));
+ 	}
+@@ -772,7 +868,7 @@ static int charlotte_hufs_link_startup_notify(struct ufs_hba *hba,
+ 		 * enabling RSR against a zero base latches a bad state.
+ 		 * ufshcd_enable_run_stop_reg() enables them at the right time.
+ 		 */
+-		dev_dbg(hba->dev,
++		dev_info(hba->dev,
+ 			 "charlotte hufs: dma utrdl=%pad ucdl=%pad\n",
+ 			 &hba->utrdl_dma_addr, &hba->ucdl_dma_addr);
+ 		charlotte_hufs_dump_core(hba);
+@@ -808,6 +904,10 @@ static const struct ufs_hba_variant_ops charlotte_hufs_vops = {
+ 	.link_startup_notify	= charlotte_hufs_link_startup_notify,
+ 	.dme_link_startup	= charlotte_hufs_dme_link_startup,
+ 	.uic_change_pwr_mode	= charlotte_hufs_uic_change_pwr_mode,
++	.dme_get		= charlotte_hufs_dme_get,
++	.dme_set		= charlotte_hufs_dme_set,
++	.get_max_pwr_mode	= charlotte_hufs_get_max_pwr_mode,
++	.pwr_change_notify	= charlotte_hufs_pwr_change_notify,
+ };
+ 
+ static const struct of_device_id charlotte_hufs_of_match[] = {
+diff --git a/include/ufs/ufshcd.h b/include/ufs/ufshcd.h
+index 6f4cf5f..230e0bb 100644
+--- a/include/ufs/ufshcd.h
++++ b/include/ufs/ufshcd.h
+@@ -355,6 +355,9 @@ struct ufs_hba_variant_ops {
+ 	/* charlotte HUF S: private UniPro attribute path */
+ 	int	(*dme_link_startup)(struct ufs_hba *hba);
+ 	int	(*uic_change_pwr_mode)(struct ufs_hba *hba, u8 mode);
++	int	(*dme_get)(struct ufs_hba *hba, u32 attr_sel, u32 *mib_val);
++	int	(*dme_set)(struct ufs_hba *hba, u32 attr_sel, u32 mib_val);
++	int	(*get_max_pwr_mode)(struct ufs_hba *hba);
+ 	int	(*pwr_change_notify)(struct ufs_hba *,
+ 			enum ufs_notify_change_status status,
+ 			const struct ufs_pa_layer_attr *desired_pwr_mode,

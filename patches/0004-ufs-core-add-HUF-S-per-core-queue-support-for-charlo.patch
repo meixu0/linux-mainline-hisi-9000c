@@ -1,0 +1,465 @@
+From 7f7e2fc8379b5deff7795e9471dc24d94fb75116 Mon Sep 17 00:00:00 2001
+From: charlotte bring-up <bringup@localhost>
+Date: Tue, 24 Nov 2026 00:48:12 +0800
+Subject: [PATCH 4/6] ufs: core: add HUF S per-core queue support for charlotte
+
+The UFS host controller in the Kirin 9000C ("HUF S") does not use the
+single legacy UTRL queue.  Instead it exposes eight per-core request
+queues in a second register block:
+
+  0x2000 + core * 0x80   IS / IE / UTRLDBR / UTRLCLR / UTRLRSR
+
+and the transfer request descriptors are 48 bytes long (four header
+dwords before command_desc_base_addr).
+
+This is the behaviour of the vendor 5.10 driver with
+CONFIG_HUFS_HC_CORE_UTR, and it is reproduced here behind
+hba->core_utr:
+
+ - nutrs is forced to SLOT_NUM_EACH_CORE * CORE_NUM (8 * 8 = 64), so
+   the reserved device-management slot is 63 (core 7, bit 7).
+ - The UTRD array keeps the vendor layout: the first 32 slots are the
+   legacy "spec" slots, software tag N maps to UTRD slot N + 32 and to
+   command descriptor N.
+ - Doorbells go to UFS_CORE_UTRLDBR(tag / 8), bit tag % 8; run/stop is
+   enabled per core and the legacy UTRLRSR is left at 0.
+ - Completion is derived from the union of all per-core doorbells.
+ - ufshcd_clear_cmd() uses the per-core UTRLCLR and waits on the
+   per-core doorbell, and ufshcd_hba_stop() disables the per-core
+   run/stop bits.
+ - The legacy interrupt status reports bogus CONTROLLER_FATAL_ERROR /
+   UIC errors in this mode, so those bits are masked in the ISR.
+
+Signed-off-by: charlotte bring-up <bringup@localhost>
+---
+ drivers/ufs/core/ufshcd.c | 235 ++++++++++++++++++++++++++++++++++----
+ include/ufs/ufshcd.h      |  13 +++
+ include/ufs/ufshci.h      |   6 +
+ 3 files changed, 232 insertions(+), 22 deletions(-)
+
+diff --git a/drivers/ufs/core/ufshcd.c b/drivers/ufs/core/ufshcd.c
+index d6a060a..d54ac62 100644
+--- a/drivers/ufs/core/ufshcd.c
++++ b/drivers/ufs/core/ufshcd.c
+@@ -1005,12 +1005,109 @@ static inline void ufshcd_disable_intr_aggr(struct ufs_hba *hba)
+  *			host controller that it can process the requests
+  * @hba: per adapter instance
+  */
++static void __ufshcd_transfer_req_compl(struct ufs_hba *hba,
++					unsigned long completed_reqs);
++
++#define CHARLOTTE_SPEC_SLOTS		32
++#define CHARLOTTE_CORE_NUM		8
++#define CHARLOTTE_CORE_IS(core)		(0x2000 + (core) * 0x80)
++#define CHARLOTTE_CORE_IE(core)		(0x2004 + (core) * 0x80)
++#define CHARLOTTE_CORE_UTRLDBR(core)	(0x2014 + (core) * 0x80)
++#define CHARLOTTE_CORE_UTRLCLR(core)	(0x2018 + (core) * 0x80)
++#define CHARLOTTE_CORE_UTRLRSR(core)	(0x201C + (core) * 0x80)
++
++u64 ufshcd_charlotte_core_doorbells(struct ufs_hba *hba)
++{
++	unsigned int i;
++	u64 doorbell = 0;
++
++	for (i = 0; i < CHARLOTTE_CORE_NUM; i++)
++		doorbell |= (u64)(ufshcd_readl(hba,
++					       CHARLOTTE_CORE_UTRLDBR(i)) & 0xff)
++			    << (8 * i);
++
++	return doorbell;
++}
++EXPORT_SYMBOL_GPL(ufshcd_charlotte_core_doorbells);
++
++void ufshcd_charlotte_core_rsr_enable(struct ufs_hba *hba)
++{
++	unsigned int i;
++
++	for (i = 0; i < CHARLOTTE_CORE_NUM; i++)
++		ufshcd_writel(hba, 1, CHARLOTTE_CORE_UTRLRSR(i));
++}
++
++void ufshcd_charlotte_core_rsr_disable(struct ufs_hba *hba)
++{
++	unsigned int i;
++
++	for (i = 0; i < CHARLOTTE_CORE_NUM; i++)
++		ufshcd_writel(hba, 0, CHARLOTTE_CORE_UTRLRSR(i));
++}
++EXPORT_SYMBOL_GPL(ufshcd_charlotte_core_rsr_enable);
++
++void ufshcd_charlotte_core_intr_enable(struct ufs_hba *hba)
++{
++	unsigned int i;
++
++	for (i = 0; i < CHARLOTTE_CORE_NUM; i++) {
++		u32 is = ufshcd_readl(hba, CHARLOTTE_CORE_IS(i));
++		u32 ie = ufshcd_readl(hba, CHARLOTTE_CORE_IE(i));
++
++		/* vendor: clear IS by writing back what was latched */
++		if (is)
++			ufshcd_writel(hba, is, CHARLOTTE_CORE_IS(i));
++		/* vendor ufshcd_enable_core_utr_intr(): IE |= CMPL|TIMEOUT */
++		ie |= 0x3;
++		ufshcd_writel(hba, ie, CHARLOTTE_CORE_IE(i));
++	}
++}
++EXPORT_SYMBOL_GPL(ufshcd_charlotte_core_intr_enable);
++
++bool ufshcd_charlotte_core_compl(struct ufs_hba *hba, unsigned int core)
++{
++	unsigned long flags, completed;
++	u32 is, db;
++
++	if (core >= CHARLOTTE_CORE_NUM)
++		return false;
++
++	is = ufshcd_readl(hba, CHARLOTTE_CORE_IS(core));
++	if (is)
++		ufshcd_writel(hba, is, CHARLOTTE_CORE_IS(core));
++	if (!(is & 0x1))
++		return is != 0;
++
++	spin_lock_irqsave(&hba->outstanding_lock, flags);
++	db = ufshcd_readl(hba, CHARLOTTE_CORE_UTRLDBR(core));
++	completed = (~(unsigned long)db & 0xffUL) << (8 * core);
++	completed &= hba->outstanding_reqs;
++	hba->outstanding_reqs &= ~completed;
++	spin_unlock_irqrestore(&hba->outstanding_lock, flags);
++
++	if (completed)
++		__ufshcd_transfer_req_compl(hba, completed);
++
++	return true;
++}
++EXPORT_SYMBOL_GPL(ufshcd_charlotte_core_compl);
++
+ static void ufshcd_enable_run_stop_reg(struct ufs_hba *hba)
+ {
+ 	ufshcd_writel(hba, UTP_TASK_REQ_LIST_RUN_STOP_BIT,
+ 		      REG_UTP_TASK_REQ_LIST_RUN_STOP);
+-	ufshcd_writel(hba, UTP_TRANSFER_REQ_LIST_RUN_STOP_BIT,
+-		      REG_UTP_TRANSFER_REQ_LIST_RUN_STOP);
++
++	/*
++	 * charlotte HUF S: in per-core queue mode the legacy UTRL run/stop
++	 * register must stay 0; only the per-core RSRs are enabled.  Enabling
++	 * the global UTRL let the controller ignore the core doorbells.
++	 */
++	if (hba->core_utr)
++		ufshcd_charlotte_core_rsr_enable(hba);
++	else
++		ufshcd_writel(hba, UTP_TRANSFER_REQ_LIST_RUN_STOP_BIT,
++			      REG_UTP_TRANSFER_REQ_LIST_RUN_STOP);
+ }
+ 
+ /**
+@@ -2389,8 +2486,12 @@ void ufshcd_send_command(struct ufs_hba *hba, unsigned int task_tag,
+ 			hba->vops->setup_xfer_req(hba, lrbp->task_tag,
+ 						  !!lrbp->cmd);
+ 		__set_bit(lrbp->task_tag, &hba->outstanding_reqs);
+-		ufshcd_writel(hba, 1 << lrbp->task_tag,
+-			      REG_UTP_TRANSFER_REQ_DOOR_BELL);
++		if (hba->core_utr)
++			ufshcd_writel(hba, 1 << (lrbp->task_tag & 7),
++				      CHARLOTTE_CORE_UTRLDBR(lrbp->task_tag >> 3));
++		else
++			ufshcd_writel(hba, 1 << lrbp->task_tag,
++				      REG_UTP_TRANSFER_REQ_DOOR_BELL);
+ 		spin_unlock_irqrestore(&hba->outstanding_lock, flags);
+ 	}
+ }
+@@ -2470,8 +2571,18 @@ static inline int ufshcd_hba_capabilities(struct ufs_hba *hba)
+ 
+ 	hba->capabilities = ufshcd_readl(hba, REG_CONTROLLER_CAPABILITIES);
+ 
+-	/* nutrs and nutmrs are 0 based values */
+-	hba->nutrs = (hba->capabilities & MASK_TRANSFER_REQUESTS_SLOTS_SDB) + 1;
++	/*
++	 * charlotte HUF S multi-queue: the vendor driver overrides the
++	 * capability-derived value with SLOT_NUM_EACH_CORE * CORE_NUM
++	 * (8 * 8 = 64).  hba->reserved_slot becomes 63 and the device
++	 * management command lands on core 7 / slot bit 7, exactly like
++	 * the working 5.10 driver.
++	 */
++	if (hba->core_utr)
++		hba->nutrs = CHARLOTTE_CORE_NUM * 8;
++	else
++		hba->nutrs =
++			(hba->capabilities & MASK_TRANSFER_REQUESTS_SLOTS_SDB) + 1;
+ 	hba->nutmrs =
+ 	((hba->capabilities & MASK_TASK_MANAGEMENT_REQUEST_SLOTS) >> 16) + 1;
+ 	hba->reserved_slot = hba->nutrs - 1;
+@@ -2977,12 +3088,13 @@ static void ufshcd_init_lrb(struct ufs_hba *hba, struct ufshcd_lrb *lrb, int i)
+ 	struct utp_transfer_req_desc *utrdlp = hba->utrdl_base_addr;
+ 	dma_addr_t cmd_desc_element_addr = hba->ucdl_dma_addr +
+ 		i * ufshcd_get_ucd_size(hba);
+-	u16 response_offset = le16_to_cpu(utrdlp[i].response_upiu_offset);
+-	u16 prdt_offset = le16_to_cpu(utrdlp[i].prd_table_offset);
++	int hidx = i + CHARLOTTE_SPEC_SLOTS;
++	u16 response_offset = le16_to_cpu(utrdlp[hidx].response_upiu_offset);
++	u16 prdt_offset = le16_to_cpu(utrdlp[hidx].prd_table_offset);
+ 
+-	lrb->utr_descriptor_ptr = utrdlp + i;
++	lrb->utr_descriptor_ptr = utrdlp + hidx;
+ 	lrb->utrd_dma_addr = hba->utrdl_dma_addr +
+-		i * sizeof(struct utp_transfer_req_desc);
++		hidx * sizeof(struct utp_transfer_req_desc);
+ 	lrb->ucd_req_ptr = (struct utp_upiu_req *)cmd_descp->command_upiu;
+ 	lrb->ucd_req_dma_addr = cmd_desc_element_addr;
+ 	lrb->ucd_rsp_ptr = (struct utp_upiu_rsp *)cmd_descp->response_upiu;
+@@ -3135,6 +3247,18 @@ static int ufshcd_clear_cmd(struct ufs_hba *hba, u32 task_tag)
+ 		return 0;
+ 	}
+ 
++	if (hba->core_utr) {
++		u32 core = task_tag >> 3;
++
++		mask = 1U << (task_tag & 7);
++		/* vendor ufshcd_utrl_clear(): per-core UTRLCLR */
++		ufshcd_writel(hba, ~mask, CHARLOTTE_CORE_UTRLCLR(core));
++		/* vendor waits on the per-core doorbell */
++		return ufshcd_wait_for_register(hba,
++						CHARLOTTE_CORE_UTRLDBR(core),
++						mask, ~mask, 1000, 1000);
++	}
++
+ 	mask = 1U << task_tag;
+ 
+ 	/* clear outstanding transaction before retry */
+@@ -3231,6 +3355,20 @@ static int ufshcd_wait_for_dev_cmd(struct ufs_hba *hba,
+ 		err = -ETIMEDOUT;
+ 		dev_dbg(hba->dev, "%s: dev_cmd request timedout, tag %d\n",
+ 			__func__, lrbp->task_tag);
++		if (hba->core_utr) {
++			u32 dbg_core = lrbp->task_tag >> 3;
++
++			dev_dbg(hba->dev,
++				 "charlotte tmo: tag=%u core=%u nutrs=%u rsv=%u DBR=%#x IS=%#x IE=%#x RSR=%#x HCS=%#x ISG=%#x\n",
++				 lrbp->task_tag, dbg_core, hba->nutrs,
++				 hba->reserved_slot,
++				 ufshcd_readl(hba, CHARLOTTE_CORE_UTRLDBR(dbg_core)),
++				 ufshcd_readl(hba, CHARLOTTE_CORE_IS(dbg_core)),
++				 ufshcd_readl(hba, CHARLOTTE_CORE_IE(dbg_core)),
++				 ufshcd_readl(hba, CHARLOTTE_CORE_UTRLRSR(dbg_core)),
++				 ufshcd_readl(hba, REG_CONTROLLER_STATUS),
++				 ufshcd_readl(hba, 0x20));
++		}
+ 
+ 		/* MCQ mode */
+ 		if (hba->mcq_enabled) {
+@@ -3940,7 +4078,8 @@ static int ufshcd_memory_alloc(struct ufs_hba *hba)
+ 	 * Allocate memory for UTP Transfer descriptors
+ 	 * UFSHCI requires 1KB alignment of UTRD
+ 	 */
+-	utrdl_size = (sizeof(struct utp_transfer_req_desc) * hba->nutrs);
++	utrdl_size = (sizeof(struct utp_transfer_req_desc) *
++		      (hba->nutrs + CHARLOTTE_SPEC_SLOTS));
+ 	hba->utrdl_base_addr = dmam_alloc_coherent(hba->dev,
+ 						   utrdl_size,
+ 						   &hba->utrdl_dma_addr,
+@@ -4024,26 +4163,28 @@ static void ufshcd_host_memory_configure(struct ufs_hba *hba)
+ 	cmd_desc_dma_addr = hba->ucdl_dma_addr;
+ 
+ 	for (i = 0; i < hba->nutrs; i++) {
++		int hidx = i + CHARLOTTE_SPEC_SLOTS;
++
+ 		/* Configure UTRD with command descriptor base address */
+ 		cmd_desc_element_addr =
+ 				(cmd_desc_dma_addr + (cmd_desc_size * i));
+-		utrdlp[i].command_desc_base_addr =
++		utrdlp[hidx].command_desc_base_addr =
+ 				cpu_to_le64(cmd_desc_element_addr);
+ 
+ 		/* Response upiu and prdt offset should be in double words */
+ 		if (hba->quirks & UFSHCD_QUIRK_PRDT_BYTE_GRAN) {
+-			utrdlp[i].response_upiu_offset =
++			utrdlp[hidx].response_upiu_offset =
+ 				cpu_to_le16(response_offset);
+-			utrdlp[i].prd_table_offset =
++			utrdlp[hidx].prd_table_offset =
+ 				cpu_to_le16(prdt_offset);
+-			utrdlp[i].response_upiu_length =
++			utrdlp[hidx].response_upiu_length =
+ 				cpu_to_le16(ALIGNED_UPIU_SIZE);
+ 		} else {
+-			utrdlp[i].response_upiu_offset =
++			utrdlp[hidx].response_upiu_offset =
+ 				cpu_to_le16(response_offset >> 2);
+-			utrdlp[i].prd_table_offset =
++			utrdlp[hidx].prd_table_offset =
+ 				cpu_to_le16(prdt_offset >> 2);
+-			utrdlp[i].response_upiu_length =
++			utrdlp[hidx].response_upiu_length =
+ 				cpu_to_le16(ALIGNED_UPIU_SIZE >> 2);
+ 		}
+ 
+@@ -4454,6 +4595,9 @@ int ufshcd_uic_change_pwr_mode(struct ufs_hba *hba, u8 mode)
+ 	};
+ 	int ret;
+ 
++	if (hba->vops && hba->vops->uic_change_pwr_mode)
++		return hba->vops->uic_change_pwr_mode(hba, mode);
++
+ 	if (hba->quirks & UFSHCD_QUIRK_BROKEN_PA_RXHSUNTERMCAP) {
+ 		ret = ufshcd_dme_set(hba,
+ 				UIC_ARG_MIB_SEL(PA_RXHSUNTERMCAP, 0), 1);
+@@ -4878,7 +5022,25 @@ int ufshcd_make_hba_operational(struct ufs_hba *hba)
+ 	 */
+ 	reg = ufshcd_readl(hba, REG_CONTROLLER_STATUS);
+ 	if (!(ufshcd_get_lists_status(reg))) {
++		int ci;
++
+ 		ufshcd_enable_run_stop_reg(hba);
++		for (ci = 0; hba->core_utr && ci < 8; ci++)
++			dev_dbg(hba->dev,
++				 "charlotte post: core%d IS=%#x IE=%#x DBR=%#x RSR=%#x 20=%#x 24=%#x\n",
++				 ci, ufshcd_readl(hba, 0x2000 + ci * 0x80),
++				 ufshcd_readl(hba, 0x2004 + ci * 0x80),
++				 ufshcd_readl(hba, 0x2014 + ci * 0x80),
++				 ufshcd_readl(hba, 0x201c + ci * 0x80),
++				 ufshcd_readl(hba, 0x2020 + ci * 0x80),
++				 ufshcd_readl(hba, 0x2024 + ci * 0x80));
++		if (hba->core_utr)
++			dev_dbg(hba->dev,
++				 "charlotte post: HCS=%#x UTRLBA=%#x/%#x UTRLRSR=%#x UTRLDBR=%#x ISG=%#x\n",
++				 ufshcd_readl(hba, REG_CONTROLLER_STATUS),
++				 ufshcd_readl(hba, 0x50), ufshcd_readl(hba, 0x54),
++				 ufshcd_readl(hba, 0x60), ufshcd_readl(hba, 0x58),
++				 ufshcd_readl(hba, 0x20));
+ 	} else {
+ 		dev_err(hba->dev,
+ 			"Host controller not ready to process requests");
+@@ -4898,6 +5060,8 @@ void ufshcd_hba_stop(struct ufs_hba *hba)
+ 	int err;
+ 
+ 	ufshcd_disable_irq(hba);
++	if (hba->core_utr)
++		ufshcd_charlotte_core_rsr_disable(hba);
+ 	ufshcd_writel(hba, CONTROLLER_DISABLE,  REG_CONTROLLER_ENABLE);
+ 	err = ufshcd_wait_for_register(hba, REG_CONTROLLER_ENABLE,
+ 					CONTROLLER_ENABLE, CONTROLLER_DISABLE,
+@@ -5074,7 +5238,10 @@ static int ufshcd_link_startup(struct ufs_hba *hba)
+ 	do {
+ 		ufshcd_vops_link_startup_notify(hba, PRE_CHANGE);
+ 
+-		ret = ufshcd_dme_link_startup(hba);
++		if (hba->vops && hba->vops->dme_link_startup)
++			ret = hba->vops->dme_link_startup(hba);
++		else
++			ret = ufshcd_dme_link_startup(hba);
+ 
+ 		/* check if device is detected by inter-connect layer */
+ 		if (!ret && !ufshcd_is_device_present(hba)) {
+@@ -5131,6 +5298,13 @@ static int ufshcd_link_startup(struct ufs_hba *hba)
+ 	/* Clear UECPA once due to LINERESET has happened during LINK_STARTUP */
+ 	ufshcd_readl(hba, REG_UIC_ERROR_CODE_PHY_ADAPTER_LAYER);
+ 	ret = ufshcd_make_hba_operational(hba);
++	if (hba->core_utr)
++		dev_dbg(hba->dev,
++			 "charlotte ls: after operational RSR0=%#x RSR7=%#x HCS=%#x nutrs=%u rsv=%u\n",
++			 ufshcd_readl(hba, CHARLOTTE_CORE_UTRLRSR(0)),
++			 ufshcd_readl(hba, CHARLOTTE_CORE_UTRLRSR(7)),
++			 ufshcd_readl(hba, REG_CONTROLLER_STATUS),
++			 hba->nutrs, hba->reserved_slot);
+ out:
+ 	if (ret)
+ 		dev_err(hba->dev, "link startup failed %d\n", ret);
+@@ -5702,8 +5876,14 @@ static int ufshcd_poll(struct Scsi_Host *shost, unsigned int queue_num)
+ 	}
+ 
+ 	spin_lock_irqsave(&hba->outstanding_lock, flags);
+-	tr_doorbell = ufshcd_readl(hba, REG_UTP_TRANSFER_REQ_DOOR_BELL);
+-	completed_reqs = ~tr_doorbell & hba->outstanding_reqs;
++	if (hba->core_utr) {
++		completed_reqs = ~ufshcd_charlotte_core_doorbells(hba) &
++				 hba->outstanding_reqs;
++	} else {
++		tr_doorbell = ufshcd_readl(hba,
++					   REG_UTP_TRANSFER_REQ_DOOR_BELL);
++		completed_reqs = ~tr_doorbell & hba->outstanding_reqs;
++	}
+ 	WARN_ONCE(completed_reqs & ~hba->outstanding_reqs,
+ 		  "completed: %#lx; outstanding: %#lx\n", completed_reqs,
+ 		  hba->outstanding_reqs);
+@@ -6955,6 +7135,16 @@ static irqreturn_t ufshcd_check_errors(struct ufs_hba *hba, u32 intr_status)
+ 	irqreturn_t retval = IRQ_NONE;
+ 
+ 	guard(spinlock_irqsave)(hba->host->host_lock);
++
++	/*
++	 * charlotte HUF S: the standard UIC/UTP error reporting in the
++	 * legacy register block is not wired up in this mode; the bits read
++	 * back as bogus fatal errors (CONTROLLER_FATAL_ERROR, UIC_ERROR).
++	 * Completions and real errors come through the per-core queues.
++	 */
++	if (hba->core_utr)
++		intr_status &= ~(INT_FATAL_ERRORS | UIC_ERROR);
++
+ 	hba->errors |= UFSHCD_ERROR_MASK & intr_status;
+ 
+ 	if (hba->errors & INT_FATAL_ERRORS) {
+@@ -8888,7 +9078,8 @@ static void ufshcd_release_sdb_queue(struct ufs_hba *hba, int nutrs)
+ 	dmam_free_coherent(hba->dev, ucdl_size, hba->ucdl_base_addr,
+ 			   hba->ucdl_dma_addr);
+ 
+-	utrdl_size = sizeof(struct utp_transfer_req_desc) * nutrs;
++	utrdl_size = sizeof(struct utp_transfer_req_desc) *
++		    (nutrs + CHARLOTTE_SPEC_SLOTS);
+ 	dmam_free_coherent(hba->dev, utrdl_size, hba->utrdl_base_addr,
+ 			   hba->utrdl_dma_addr);
+ 
+diff --git a/include/ufs/ufshcd.h b/include/ufs/ufshcd.h
+index 0f95576..6f4cf5f 100644
+--- a/include/ufs/ufshcd.h
++++ b/include/ufs/ufshcd.h
+@@ -352,6 +352,9 @@ struct ufs_hba_variant_ops {
+ 				     enum ufs_notify_change_status);
+ 	int	(*link_startup_notify)(struct ufs_hba *,
+ 				       enum ufs_notify_change_status);
++	/* charlotte HUF S: private UniPro attribute path */
++	int	(*dme_link_startup)(struct ufs_hba *hba);
++	int	(*uic_change_pwr_mode)(struct ufs_hba *hba, u8 mode);
+ 	int	(*pwr_change_notify)(struct ufs_hba *,
+ 			enum ufs_notify_change_status status,
+ 			const struct ufs_pa_layer_attr *desired_pwr_mode,
+@@ -987,6 +990,9 @@ struct ufs_hba {
+ 
+ 	unsigned long outstanding_tasks;
+ 	spinlock_t outstanding_lock;
++	/* charlotte HUF S: per-core UTP queues (doorbell/IS/IE per core) */
++	bool core_utr;
++
+ 	unsigned long outstanding_reqs;
+ 
+ 	u32 capabilities;
+@@ -1306,6 +1312,13 @@ void ufshcd_enable_intr(struct ufs_hba *hba, u32 intrs);
+ int ufshcd_alloc_host(struct device *, struct ufs_hba **);
+ int ufshcd_hba_enable(struct ufs_hba *hba);
+ int ufshcd_init(struct ufs_hba *, void __iomem *, unsigned int);
++
++/* charlotte HUF S per-core UTP helpers */
++u64 ufshcd_charlotte_core_doorbells(struct ufs_hba *hba);
++void ufshcd_charlotte_core_rsr_enable(struct ufs_hba *hba);
++void ufshcd_charlotte_core_rsr_disable(struct ufs_hba *hba);
++void ufshcd_charlotte_core_intr_enable(struct ufs_hba *hba);
++bool ufshcd_charlotte_core_compl(struct ufs_hba *hba, unsigned int core);
+ int ufshcd_link_recovery(struct ufs_hba *hba);
+ int ufshcd_make_hba_operational(struct ufs_hba *hba);
+ void ufshcd_remove(struct ufs_hba *);
+diff --git a/include/ufs/ufshci.h b/include/ufs/ufshci.h
+index e64b701..2411ec2 100644
+--- a/include/ufs/ufshci.h
++++ b/include/ufs/ufshci.h
+@@ -553,6 +553,12 @@ struct utp_transfer_req_desc {
+ 	/* DW 7 */
+ 	__le16  prd_table_length;
+ 	__le16  prd_table_offset;
++
++	/* DW 8-11: charlotte HUF S meta data (48-byte descriptor) */
++	__le32  meta_data_random_factor_0;
++	__le32  meta_data_random_factor_1;
++	__le32  meta_data_random_factor_2;
++	__le32  meta_data_random_factor_3;
+ };
+ 
+ /* MCQ Completion Queue Entry */

@@ -1,0 +1,43 @@
+From e72739cf7be74ed7e681f93454ccd8a127826273 Mon Sep 17 00:00:00 2001
+From: charlotte bring-up <bringup@localhost>
+Date: Tue, 24 Nov 2026 00:48:12 +0800
+Subject: [PATCH 3/6] misc: add dss-power-probe diagnostic driver
+
+Add a small, default-disabled driver that pokes the display subsystem
+power/clock registers of the Kirin 9000C.  It exists purely to diagnose
+why the DPU/HDMI blocks are dead after the firmware hand-over; it is not
+required for UFS or console operation.
+
+Signed-off-by: charlotte bring-up <bringup@localhost>
+---
+ drivers/misc/Kconfig  | 9 +++++++++
+ drivers/misc/Makefile | 1 +
+ 2 files changed, 10 insertions(+)
+
+diff --git a/drivers/misc/Kconfig b/drivers/misc/Kconfig
+index b9c11f6..d93cbbf 100644
+--- a/drivers/misc/Kconfig
++++ b/drivers/misc/Kconfig
+@@ -661,4 +661,13 @@ source "drivers/misc/mchp_pci1xxxx/Kconfig"
+ source "drivers/misc/keba/Kconfig"
+ source "drivers/misc/amd-sbi/Kconfig"
+ source "drivers/misc/rp1/Kconfig"
++
++config DSS_POWER_PROBE
++	bool "Kirin display subsystem power probe"
++	depends on ARM64
++	default y
++	help
++	  Test driver: power on media1/vivobus/dss via the ATF ip-regulator
++	  SMC and try to read the DPU register window.
++
+ endmenu
+diff --git a/drivers/misc/Makefile b/drivers/misc/Makefile
+index b32a259..4e555be 100644
+--- a/drivers/misc/Makefile
++++ b/drivers/misc/Makefile
+@@ -75,3 +75,4 @@ obj-$(CONFIG_MCHP_LAN966X_PCI)	+= lan966x-pci.o
+ obj-y				+= keba/
+ obj-y				+= amd-sbi/
+ obj-$(CONFIG_MISC_RP1)		+= rp1/
++obj-$(CONFIG_DSS_POWER_PROBE) += dss-power-probe.o

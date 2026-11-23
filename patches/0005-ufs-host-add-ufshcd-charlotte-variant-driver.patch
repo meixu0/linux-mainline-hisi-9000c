@@ -1,0 +1,61 @@
+From 265c2ee21042cc820afeb8f8b12412c56b8204d3 Mon Sep 17 00:00:00 2001
+From: charlotte bring-up <bringup@localhost>
+Date: Tue, 24 Nov 2026 00:48:12 +0800
+Subject: [PATCH 5/6] ufs: host: add ufshcd-charlotte variant driver
+
+Add the platform glue for the Kirin 9000C UFS host controller
+(compatible "hisilicon,hufs").  The mainline ufshcd core is reused; the
+variant driver only provides what is SoC specific:
+
+ - SoC bring-up (SCTRL/ACTRL resets, clocks, memory TRA bits) before HCE.
+ - MPHY v300 pre-link training and the post-link UniPro N_/T_
+   connection attributes taken from the vendor driver.  Without the
+   N_/T_ table the DME link reports LINK_UP but no UPIU can be
+   transferred, which makes the first command fail with a controller
+   fatal error.
+ - Link startup through the private UniPro window (0xfa400000, dword
+   indexed) because the standard UIC command interface never completes.
+ - HUF S arbitration/QoS defaults and the eight per-core interrupts
+   (DT SPI 120..127).
+ - 32-bit DMA mask, matching the working 5.10 configuration.
+
+Signed-off-by: charlotte bring-up <bringup@localhost>
+---
+ drivers/ufs/host/Kconfig  | 11 +++++++++++
+ drivers/ufs/host/Makefile |  1 +
+ 2 files changed, 12 insertions(+)
+
+diff --git a/drivers/ufs/host/Kconfig b/drivers/ufs/host/Kconfig
+index 191fbd7..d0691d4 100644
+--- a/drivers/ufs/host/Kconfig
++++ b/drivers/ufs/host/Kconfig
+@@ -94,6 +94,17 @@ config SCSI_UFS_HISI
+ 	  Select this if you have UFS controller on Hisilicon chipset.
+ 	  If unsure, say N.
+ 
++config SCSI_UFS_CHARLOTTE
++	tristate "HiSilicon charlotte HUF S UFS bring-up scaffold"
++	depends on (ARCH_HISI || COMPILE_TEST) && SCSI_UFSHCD_PLATFORM
++	help
++	  Resource-mapping scaffold for the Kirin 9000C "hisilicon,hufs"
++	  controller.  The vendor HUF S UTR/UIC/MPHY stack has not been
++	  ported yet, so this driver intentionally fails with -EOPNOTSUPP
++	  instead of touching the controller.
++
++	  Keep the DT node disabled until the real port lands.
++
+ config SCSI_UFS_RENESAS
+ 	tristate "Renesas specific hooks to UFS controller platform driver"
+ 	depends on (ARCH_RENESAS || COMPILE_TEST) && SCSI_UFSHCD_PLATFORM
+diff --git a/drivers/ufs/host/Makefile b/drivers/ufs/host/Makefile
+index 2f97feb..852475f 100644
+--- a/drivers/ufs/host/Makefile
++++ b/drivers/ufs/host/Makefile
+@@ -8,6 +8,7 @@ obj-$(CONFIG_SCSI_UFS_EXYNOS) += ufs-exynos.o
+ obj-$(CONFIG_SCSI_UFSHCD_PCI) += ufshcd-pci.o
+ obj-$(CONFIG_SCSI_UFSHCD_PLATFORM) += ufshcd-pltfrm.o
+ obj-$(CONFIG_SCSI_UFS_HISI) += ufs-hisi.o
++obj-$(CONFIG_SCSI_UFS_CHARLOTTE) += ufs-charlotte.o
+ obj-$(CONFIG_SCSI_UFS_MEDIATEK) += ufs-mediatek.o
+ obj-$(CONFIG_SCSI_UFS_RENESAS) += ufs-renesas.o
+ obj-$(CONFIG_SCSI_UFS_ROCKCHIP) += ufs-rockchip.o
