@@ -1,0 +1,43 @@
+Linux version 6.18.0-00007-g0f907a9a9106 (builder@buildhost) (gcc (Debian 14.2.0-19) 14.2.0, GNU ld (GNU Binutils for Debian) 2.44) #1 SMP Tue Nov 24 04:17:25 CST 2026
+charlotte-pcie f8000000.pcie: PCIe0 power-on
+charlotte-pcie f8000000.pcie: DBI id=0x36b019e5 link=0
+charlotte-pcie f8000000.pcie: host bridge /pcie@f8000000 ranges:
+charlotte-pcie f8000000.pcie:      MEM 0x00f8500000..0x00fa1fffff -> 0x00f8500000
+charlotte-pcie f8000000.pcie: iATU: unroll T, 8 ob, 8 ib, align 64K, limit 4G
+charlotte-pcie f8000000.pcie: PCIe Gen.3 x1 link up
+charlotte-pcie f8000000.pcie: PCI host bridge to bus 0000:00
+pci 0000:01:00.0: [1b21:1064] type 00 class 0x010601 PCIe Endpoint
+pci 0000:01:00.0: BAR 0 [mem 0x00000000-0x00001fff]
+pci 0000:01:00.0: BAR 5 [mem 0x00000000-0x00001fff]
+pci 0000:01:00.0: ROM [mem 0x00000000-0x0007ffff pref]
+pci 0000:01:00.0: enabling Extended Tags
+pci 0000:01:00.0: PME# supported from D0 D3hot D3cold
+pci 0000:01:00.0: ASPM: default states L0s L1
+pci 0000:01:00.0: ROM [mem 0xf8500000-0xf857ffff pref]: assigned
+pci 0000:01:00.0: BAR 0 [mem 0xf8580000-0xf8581fff]: assigned
+pci 0000:01:00.0: BAR 5 [mem 0xf8582000-0xf8583fff]: assigned
+charlotte-pcie f8000000.pcie: host ready, link=1
+ahci 0000:01:00.0: enabling device (0000 -> 0002)
+ahci 0000:01:00.0: SSS flag set, parallel bus scan disabled
+ahci 0000:01:00.0: AHCI vers 0001.0301, 32 command slots, 6 Gbps, SATA mode
+ahci 0000:01:00.0: 4/4 ports implemented (port mask 0xf)
+ahci 0000:01:00.0: flags: 64bit ncq sntf stag pm led only pmp pio slum part deso sadm sds apst 
+scsi host0: ahci
+scsi host1: ahci
+scsi host2: ahci
+scsi host3: ahci
+ufshcd-charlotte fa500000.ufs: charlotte hufs: unipro state 0x80 before link startup
+ufshcd-charlotte fa500000.ufs: charlotte hufs: link up (state 0x100)
+scsi 4:0:0:49488: Well-known LUN    HISI     THR935GFCV100HDE 0232 PQ: 0 ANSI: 6
+scsi 4:0:0:49476: Well-known LUN    HISI     THR935GFCV100HDE 0232 PQ: 0 ANSI: 6
+scsi 4:0:0:49456: Well-known LUN    HISI     THR935GFCV100HDE 0232 PQ: 0 ANSI: 6
+scsi 4:0:0:0: Direct-Access     HISI     THR935GFCV100HDE 0232 PQ: 0 ANSI: 6
+scsi 4:0:0:1: Direct-Access     HISI     THR935GFCV100HDE 0232 PQ: 0 ANSI: 6
+scsi 4:0:0:2: Direct-Access     HISI     THR935GFCV100HDE 0232 PQ: 0 ANSI: 6
+scsi 4:0:0:3: Direct-Access     HISI     THR935GFCV100HDE 0232 PQ: 0 ANSI: 6
+sd 4:0:0:0: [sda] Attached SCSI disk
+sd 4:0:0:1: [sdb] Attached SCSI disk
+sd 4:0:0:2: [sdc] Attached SCSI disk
+ sdd: sdd1 sdd2 sdd3
+sd 4:0:0:3: [sdd] Attached SCSI disk
+BusyBox v1.37.0 (Debian 1:1.37.0-6+b9) built-in shell (ash)

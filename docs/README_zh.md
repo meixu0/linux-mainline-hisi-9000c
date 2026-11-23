@@ -90,6 +90,19 @@ GRUB 条目名为 `Linux 6.18 charlotte bring-up (TEST - uart console)`，
 - 完整移植报告：[中文](bringup_report_zh.md)
 - 串口日志：[docs/logs](logs/)
 
+## 构建验证
+
+本仓库在 2026-11-24 做过端到端验证：干净的上游 `v6.18` + 7 个补丁 +
+`defconfig/charlotte_6.18_defconfig` 构建出的内核，配置与板子上当前可用的
+6.18 镜像完全一致；并且实际启动验证了：
+
+- 内核 `6.18.0-00007-g0f907a9a9106`，Image md5 `4690ec04b1a04b2183411104d17014ee`
+- UFS `sda`..`sdd`（HS-G4 链路）、PCIe0 Gen3 x1 + 板载 SATA（`ahci`）、
+  串口控制台、内置 amdgpu
+- DTB 与已安装版本一致（`b5232b5772bdefccd8a2bb2da7c1cdb4`）
+
+详情：[构建验证记录](build_verification_zh.md)。
+
 ## 安全注意事项
 
 - 不要修改 GRUB 默认项，也不要覆盖 5.10 内核/rootfs。

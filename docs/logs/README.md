@@ -10,6 +10,7 @@ re-checked.
 | `6.18-ufs-hs-g4.log` | UFS after the HS-G4 fix: `gear=4 lanes=2 hs_rate=2`, ~931 MB/s read |
 | `6.18-pcie-link-up.log` | PCIe0 Gen3 x1 link up, ASM1064 SATA enumerated, `ahci` bound |
 | `6.18-sdd2-chroot-final.log` | initramfs `sdd2-chroot` into GXDE OS 25 and `uname -r` inside |
+| `6.18-repotest-boot.log` | kernel rebuilt from this repository (upstream v6.18 + patches + defconfig) booting on the board |
 
 Capture command (the port is single-reader):
 

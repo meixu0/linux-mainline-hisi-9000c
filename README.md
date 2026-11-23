@@ -93,6 +93,20 @@ is only selected through `grub-reboot`; the GRUB default must stay on 5.10.
 - Full bring-up report: [中文](docs/bringup_report_zh.md)
 - Serial logs: [docs/logs](docs/logs/)
 
+## Build verification
+
+The repository was verified end-to-end on 2026-11-24: a clean upstream `v6.18`
+checkout, the seven patches and `defconfig/charlotte_6.18_defconfig` build an
+Image whose configuration is identical to the working 6.18 image on the board.
+The image was booted and reproduces the expected functionality:
+
+- kernel `6.18.0-00007-g0f907a9a9106`, Image md5 `4690ec04b1a04b2183411104d17014ee`
+- UFS `sda`..`sdd` (HS-G4 link), PCIe0 Gen3 x1 + onboard SATA (`ahci`),
+  UART console, built-in amdgpu
+- matching DTB (`b5232b5772bdefccd8a2bb2da7c1cdb4`)
+
+Details: [中文](docs/build_verification_zh.md).
+
 ## Safety notes
 
 - Never change the GRUB default or overwrite the 5.10 kernel/rootfs.
