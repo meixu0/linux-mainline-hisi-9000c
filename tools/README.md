@@ -9,7 +9,8 @@ Freestanding aarch64 MMIO tool used instead of `/dev/mem` when servicing
 registers that must not be touched by a normal process.
 
 ```sh
-aarch64-linux-gnu-gcc -static -O2 -o charlotte-diag charlotte-diag.c
+make -C tools charlotte-diag
+# or: aarch64-linux-gnu-gcc -static -O2 -o charlotte-diag charlotte-diag.c
 sudo ./charlotte-diag dump 0xffb85000 0x100
 sudo ./charlotte-diag dump 0xfb21b000 0x400
 ```
