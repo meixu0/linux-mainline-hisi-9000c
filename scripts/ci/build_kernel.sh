@@ -38,6 +38,7 @@ else
 fi
 
 echo "==> configuring"
+mkdir -p arch/arm64/configs
 cp "$REPO_DIR/defconfig/charlotte_6.18_defconfig" arch/arm64/configs/charlotte_defconfig
 make ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" charlotte_defconfig
 

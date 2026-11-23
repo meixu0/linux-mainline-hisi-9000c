@@ -31,6 +31,7 @@ jobs:
           git config user.name "hisi-9000c buildbot"
           git config user.email "buildbot@localhost"
           git am "$GITHUB_WORKSPACE"/buildbot/patches/*.patch
+          mkdir -p arch/arm64/configs
           cp "$GITHUB_WORKSPACE"/buildbot/defconfig/charlotte_6.18_defconfig \
              arch/arm64/configs/charlotte_defconfig
 
