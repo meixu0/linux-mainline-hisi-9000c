@@ -1,0 +1,55 @@
+charlotte-pcie f8000000.pcie: PCIe0 power-on
+charlotte-pcie f8000000.pcie: DBI id=0x36b019e5 link=0
+charlotte-pcie f8000000.pcie: host bridge /pcie@f8000000 ranges:
+charlotte-pcie f8000000.pcie:      MEM 0x00f8500000..0x00fa1fffff -> 0x00f8500000
+charlotte-pcie f8000000.pcie: iATU: unroll T, 8 ob, 8 ib, align 64K, limit 4G
+charlotte-pcie f8000000.pcie: PCIe Gen.3 x1 link up
+charlotte-pcie f8000000.pcie: PCI host bridge to bus 0000:00
+pci 0000:00:00.0: [19e5:36b0] type 01 class 0x060400 PCIe Root Port
+pci 0000:00:00.0: BAR 0 [mem 0x00000000-0x00ffffff]
+pci 0000:00:00.0: PCI bridge to [bus 01-ff]
+pci 0000:00:00.0:   bridge window [io  0x0000-0x0fff]
+pci 0000:00:00.0:   bridge window [mem 0x00000000-0x000fffff]
+pci 0000:00:00.0:   bridge window [mem 0x00000000-0x000fffff 64bit pref]
+pci 0000:00:00.0: supports D1 D2
+pci 0000:00:00.0: PME# supported from D0 D1 D2 D3hot D3cold
+pci 0000:01:00.0: [1b21:1064] type 00 class 0x010601 PCIe Endpoint
+pci 0000:01:00.0: BAR 0 [mem 0x00000000-0x00001fff]
+pci 0000:01:00.0: BAR 5 [mem 0x00000000-0x00001fff]
+pci 0000:01:00.0: ROM [mem 0x00000000-0x0007ffff pref]
+pci 0000:01:00.0: enabling Extended Tags
+pci 0000:01:00.0: PME# supported from D0 D3hot D3cold
+pci 0000:01:00.0: ASPM: default states L0s L1
+pci 0000:00:00.0: BAR 0 [mem 0xf9000000-0xf9ffffff]: assigned
+pci 0000:00:00.0: bridge window [mem 0xf8500000-0xf85fffff]: assigned
+pci 0000:01:00.0: ROM [mem 0xf8500000-0xf857ffff pref]: assigned
+pci 0000:01:00.0: BAR 0 [mem 0xf8580000-0xf8581fff]: assigned
+pci 0000:01:00.0: BAR 5 [mem 0xf8582000-0xf8583fff]: assigned
+pci 0000:00:00.0: PCI bridge to [bus 01-ff]
+pci 0000:00:00.0:   bridge window [mem 0xf8500000-0xf85fffff]
+charlotte-pcie f8000000.pcie: host ready, link=1
+[drm] amdgpu kernel modesetting enabled.
+ahci 0000:01:00.0: enabling device (0000 -> 0002)
+ahci 0000:01:00.0: SSS flag set, parallel bus scan disabled
+ahci 0000:01:00.0: AHCI vers 0001.0301, 32 command slots, 6 Gbps, SATA mode
+ahci 0000:01:00.0: 4/4 ports implemented (port mask 0xf)
+ahci 0000:01:00.0: flags: 64bit ncq sntf stag pm led only pmp pio slum part deso sadm sds apst 
+scsi host0: ahci
+scsi host1: ahci
+scsi host2: ahci
+scsi host3: ahci
+ata1: SATA max UDMA/133 abar m8192@0xf8582000 port 0xf8582100 irq 15 lpm-pol 4
+ata2: SATA max UDMA/133 abar m8192@0xf8582000 port 0xf8582180 irq 15 lpm-pol 4
+ata3: SATA max UDMA/133 abar m8192@0xf8582000 port 0xf8582200 irq 15 lpm-pol 4
+ata4: SATA max UDMA/133 abar m8192@0xf8582000 port 0xf8582280 irq 15 lpm-pol 4
+scsi host4: ufshcd
+ata1: softreset failed (1st FIS failed)
+ata1: softreset failed (1st FIS failed)
+ata1: softreset failed (1st FIS failed)
+ata1: limiting SATA link speed to <unknown>
+ata1: softreset failed (1st FIS failed)
+ata1: softreset failed
+ata1: reset failed, giving up
+ata2: SATA link down (SStatus 0 SControl 300)
+ata3: SATA link down (SStatus 0 SControl 300)
+ata4: SATA link down (SStatus 0 SControl 300)

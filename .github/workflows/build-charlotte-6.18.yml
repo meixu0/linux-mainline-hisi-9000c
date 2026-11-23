@@ -1,0 +1,58 @@
+name: build-charlotte-6.18
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout buildbot repo
+        uses: actions/checkout@v4
+        with:
+          path: buildbot
+
+      - name: Install cross toolchain and build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential bison flex bc libssl-dev libelf-dev \
+            device-tree-compiler cpio kmod git \
+            gcc-aarch64-linux-gnu
+
+      - name: Fetch v6.18 and apply the series
+        run: |
+          git clone --depth 1 --branch v6.18 \
+            https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git linux-6.18
+          cd linux-6.18
+          git config user.name "charlotte buildbot"
+          git config user.email "buildbot@localhost"
+          git am "$GITHUB_WORKSPACE"/buildbot/patches/*.patch
+          cp "$GITHUB_WORKSPACE"/buildbot/defconfig/charlotte_6.18_defconfig \
+             arch/arm64/configs/charlotte_defconfig
+
+      - name: Build Image, DTB and modules
+        run: |
+          cd linux-6.18
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- charlotte_defconfig
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j"$(nproc)" \
+               Image dtbs modules
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p out
+          cp linux-6.18/arch/arm64/boot/Image out/
+          cp linux-6.18/arch/arm64/boot/dts/hisilicon/charlotte-9000c.dtb out/
+          cp linux-6.18/System.map out/System.map-6.18
+          (cd linux-6.18 && make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
+              INSTALL_MOD_PATH="$GITHUB_WORKSPACE/out/modules" modules_install)
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: charlotte-6.18
+          path: out/
+          if-no-files-found: error

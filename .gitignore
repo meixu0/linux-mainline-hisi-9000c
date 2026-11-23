@@ -1,0 +1,40 @@
+# Kernel build artifacts
+*.o
+*.o.*
+*.ko
+*.mod
+*.mod.c
+*.cmd
+*.tmp
+.tmp_*
+.config
+.config.old
+.defconfig
+.version
+vmlinux
+vmlinux.*
+System.map
+Module.symvers
+modules.order
+modules.builtin
+modules.builtin.modinfo
+include/config/
+include/generated/
+scripts/basic/fixdep
+scripts/mod/modpost
+
+# Boot images / packages
+Image
+Image.gz
+*.dtb
+*.cpio
+*.cpio.gz
+*.deb
+*.rpm
+*.tar.*
+*.tgz
+
+# Editor / OS
+.DS_Store
+*.swp
+*~
