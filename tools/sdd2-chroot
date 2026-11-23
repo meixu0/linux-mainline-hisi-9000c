@@ -1,0 +1,62 @@
+#!/bin/busybox sh
+# Mount the installed root filesystem (sdd2) and enter it with chroot.
+#
+#   sdd2-chroot                     mount read-only, interactive shell
+#   sdd2-chroot rw                  mount read-write, interactive shell
+#   sdd2-chroot [ro|rw] CMD [ARGS]  run one command inside the rootfs
+#
+# Read-only is the safe default: -o ro,noload means no journal replay and
+# nothing is written back to the installed system.
+#
+# Exiting the chroot returns to the initramfs shell; mounts stay in place.
+#
+# NOTE: bash's Readline uses select() on stdin, and this bring-up UART does
+# not wake pollers reliably yet, so the interactive shell is started with
+# --noediting (plain read(2) path).  Use `bash` by hand if you prefer
+# Readline and are willing to press the serial BREAK to wake it.
+
+BB=/bin/busybox
+M=/mnt/sdd2
+
+case "$1" in
+	rw) OPT="rw"; shift ;;
+	ro) OPT="ro,noload"; shift ;;
+	"") OPT="ro,noload" ;;
+	*)  OPT="ro,noload" ;;
+esac
+
+if [ ! -e /dev/sdd2 ]; then
+	echo "sdd2-chroot: /dev/sdd2 not found (UFS not enumerated?)"
+	exit 1
+fi
+
+$BB mkdir -p "$M"
+
+if ! $BB mount -t ext4 -o "$OPT" /dev/sdd2 "$M"; then
+	echo "sdd2-chroot: mount failed"
+	echo "  if the filesystem is marked dirty try: sdd2-chroot rw"
+	exit 1
+fi
+
+$BB mount --bind /dev "$M/dev" 2>/dev/null
+$BB mount -t proc proc "$M/proc" 2>/dev/null
+$BB mount -t sysfs sysfs "$M/sys" 2>/dev/null
+
+if [ $# -gt 0 ]; then
+	# one-shot command
+	$BB chroot "$M" "$@"
+	rc=$?
+	echo "--- command finished (rc=$rc); /dev/sdd2 still mounted on $M"
+	exit $rc
+fi
+
+echo "--- /dev/sdd2 mounted on $M ($OPT)"
+$BB head -3 "$M/etc/os-release" 2>/dev/null
+echo "--- entering chroot, type 'exit' to return"
+
+trap '' HUP INT QUIT TTIN TTOU PIPE
+$BB chroot "$M" /bin/bash -l --noediting 2>/dev/null ||
+	$BB chroot "$M" /bin/sh -i 2>/dev/null ||
+	$BB chroot "$M" /bin/sh
+
+echo "--- left chroot (mounts kept under $M)"
