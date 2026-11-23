@@ -28,7 +28,7 @@ jobs:
           git clone --depth 1 --branch v6.18 \
             https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git linux-6.18
           cd linux-6.18
-          git config user.name "charlotte buildbot"
+          git config user.name "hisi-9000c buildbot"
           git config user.email "buildbot@localhost"
           git am "$GITHUB_WORKSPACE"/buildbot/patches/*.patch
           cp "$GITHUB_WORKSPACE"/buildbot/defconfig/charlotte_6.18_defconfig \

@@ -30,7 +30,7 @@ cd "$KERN_SRC"
 
 if ! git log --oneline -1 --grep "charlotte PCIe host support" | grep -q .; then
   echo "==> applying $REPO_DIR/patches"
-  git config user.name  "charlotte buildbot"
+  git config user.name  "hisi-9000c buildbot"
   git config user.email "buildbot@localhost"
   git am "$REPO_DIR"/patches/*.patch
 else

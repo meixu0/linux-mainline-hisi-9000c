@@ -13,7 +13,7 @@
 
 | # | 问题 | 状态 | 一句话结论 |
 |---|---|---|---|
-| 1 | 6.18 只起来 4 个 CPU | **已解决** | 启动核声明 PAC、其余核不声明，`ARM64_HAS_ADDRESS_AUTH` 冲突。加 `arm64.nopauth` 后 12 核全可用。 |
+| 1 | 6.18 只起来 4 个 CPU | **已解决** | 启动核声明 PAC、其余核不声明，`ARM64_HAS_ADDRESS_AUTH` 冲突。加 `arm64.nopauth` 后 8c12t（12 个逻辑 CPU）全可用。 |
 | 2 | 6.18 无显示（黑屏、显示器报无信号） | **已定位，未修复** | 固件交接时关掉了整个显示子系统；6.18 没有对应的电源/时钟/DPU 驱动。efifb 写显存有效但无人扫描输出。 |
 | 3 | 没有可用的调试通道 | **已解决** | 新增 V500 UART 驱动，`ttyHW0` 双向控制台可用（并修好了 RX 32 字节门限与 TX 丢字）。 |
 | 4 | 根文件系统 / 存储 | 未开始 | UFS（`hufs`）未移植，6.18 目前只跑 initramfs。 |
@@ -224,7 +224,7 @@ initrd /boot/linux-6.18-charlotte/initramfs-console.cpio.gz
 ```
 
 - `earlycon`：最早的轮询控制台；`console=ttyHW0`：唯一真 console（故意不放 `console=tty0`，避免日志跑到黑屏）。
-- `arm64.nopauth`：12 核修复。
+- `arm64.nopauth`：8c12t（12 逻辑 CPU）修复。
 - `panic=20`：panic 后自动重启回 5.10，不再需要手动断电。
 
 ### 单次启动到 6.18（无需人在机器旁）

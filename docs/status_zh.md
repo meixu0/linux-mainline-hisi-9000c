@@ -12,7 +12,7 @@
 
 | 问题 | 状态 | 结论 |
 |---|---|---|
-| 6.18 只能启动 4 个 CPU | **已修复** | 启动 CPU 声明 PAC/QARMA5，其余核不声明，`ARM64_HAS_ADDRESS_AUTH`（capability 5）冲突导致 CPU4-11 被杀。加 `arm64.nopauth` 后 12 核全可用。 |
+| 6.18 只能启动 4 个 CPU | **已修复** | 启动 CPU 声明 PAC/QARMA5，其余核不声明，`ARM64_HAS_ADDRESS_AUTH`（capability 5）冲突导致 CPU4-11 被杀。加 `arm64.nopauth` 后 8c12t（12 个逻辑 CPU）全可用。 |
 | 6.18 无显示（黑屏） | **已定位，未修复** | 固件在交接（ExitBootServices）时关掉了整个 DPU + HDMI 输出；6.18 没有该显示控制器驱动，efifb 只是往显存写，没人扫描输出。显示器直接报“无信号”。 |
 | 没有可用的早期调试通道 | **已解决** | 新增 V500 UART 驱动，`ttyHW0` 控制台可双向交互（`console=ttyHW0,115200n8`）。 |
 | 根文件系统 / 存储 | 未开始 | UFS（`hufs`）驱动未移植，当前 6.18 只跑 initramfs。 |
@@ -213,7 +213,7 @@ menuentry "Linux 6.18 charlotte bring-up (TEST - uart console)" {
 
 - `earlycon=uart_v500,0xff894000`：最早的轮询控制台。
 - `console=ttyHW0,115200n8`：唯一真正的 console（故意不加 `console=tty0`，避免日志跑到黑屏上）。
-- `arm64.nopauth`：12 核修复。
+- `arm64.nopauth`：8c12t（12 逻辑 CPU）修复。
 - `panic=20`：panic 后 20 秒自动重启回 5.10（不再需要手动断电）。
 
 ### 构建
@@ -329,7 +329,7 @@ GRUB 默认项仍是 5.10，不受影响；测试项手动选最后一项。
 CPU4: Detected conflict for capability 5 ((null)), System: 1, CPU: 0
 ```
 
-### 修复后（12 核）
+### 修复后（8c12t / 12 逻辑 CPU）
 
 ```
 CPU features: SYS_ID_AA64ISAR1_EL1[27:24]: forced to 0

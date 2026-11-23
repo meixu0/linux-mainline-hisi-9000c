@@ -1,6 +1,6 @@
 English | [中文](docs/README_zh.md)
 
-# linux-charlotte-buildbot
+# linux-mainline-hisi-9000c
 
 Build scripts, patches, kernel configuration, DTS files and tools for bringing up mainline Linux 6.18 on the HUAWEI Kirin 9000C SBC (codename `charlotte`, board `QHW-100` / `SP1PANGUXM`).
 
@@ -27,7 +27,7 @@ one-shot test entry (`grub-reboot`).
 
 | Feature | 5.10 vendor | 6.18 mainline |
 |---|---|---|
-| 12-core SMP boot | yes | yes |
+| 8c12t SMP boot (8 cores / 12 threads) | yes | yes |
 | UART console (`uart_v500`) | yes | yes |
 | UFS (3 LUNs, 43 partitions) | yes | yes, HS-G4 / 2 lanes (~931 MB/s read) |
 | PCIe0 (onboard ASM1064 SATA) | yes | yes, Gen3 x1 + `ahci` |

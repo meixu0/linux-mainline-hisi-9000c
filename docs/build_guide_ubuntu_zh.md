@@ -2,7 +2,7 @@
 
 # 构建指南（板端 Ubuntu/Debian）
 
-下面的命令都在**板子本机**执行（aarch64 原生编译，12 核）。在交叉编译主机上
+下面的命令都在**板子本机**执行（aarch64 原生编译，8c12t / 12 个逻辑 CPU）。在交叉编译主机上
 构建也可以，只需要改 `make` 的调用方式。
 
 ## 0. 依赖
@@ -20,7 +20,7 @@ git clone --depth 1 --branch v6.18 \
     https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git linux-6.18
 cd linux-6.18
 
-git am /path/to/linux-charlotte-buildbot/patches/*.patch
+git am /path/to/linux-mainline-hisi-9000c/patches/*.patch
 ```
 
 补丁按 `0001` .. `0007` 顺序排列，可在干净的 `v6.18` 上直接应用。
@@ -28,7 +28,7 @@ git am /path/to/linux-charlotte-buildbot/patches/*.patch
 ## 2. 配置
 
 ```sh
-cp /path/to/linux-charlotte-buildbot/defconfig/charlotte_6.18_defconfig \
+cp /path/to/linux-mainline-hisi-9000c/defconfig/charlotte_6.18_defconfig \
    arch/arm64/configs/charlotte_defconfig
 make charlotte_defconfig
 ```

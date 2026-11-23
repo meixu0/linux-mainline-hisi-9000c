@@ -1,6 +1,6 @@
 [English](../README.md) | 中文
 
-# linux-charlotte-buildbot
+# linux-mainline-hisi-9000c
 
 面向华为麒麟 9000C（代号 `charlotte`，板卡 `QHW-100` / `SP1PANGUXM`）单板计算机的
 Linux 6.18 主线移植：构建脚本、补丁、内核配置、设备树和工具集。
@@ -27,7 +27,7 @@ Linux 6.18 主线移植：构建脚本、补丁、内核配置、设备树和工
 
 | 功能 | 5.10 厂商内核 | 6.18 主线 |
 |---|---|---|
-| 12 核 SMP 启动 | 是 | 是 |
+| 8c12t SMP 启动（8 核 12 线程） | 是 | 是 |
 | 串口控制台（`uart_v500`） | 是 | 是 |
 | UFS（3 个 LUN，43 个分区） | 是 | 是，HS-G4 / 2 lanes（读约 931 MB/s） |
 | PCIe0（板载 ASM1064 SATA） | 是 | 是，Gen3 x1 + `ahci` |

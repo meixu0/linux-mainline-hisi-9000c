@@ -2,7 +2,7 @@
 
 # Build guide (Ubuntu/Debian on the board)
 
-All commands below run **on the board itself** (aarch64 native build, 12 cores).
+All commands below run **on the board itself** (aarch64 native build, 8c12t / 12 logical CPUs).
 Building on a cross-compile host works too; only the `make` invocations change.
 
 ## 0. Prerequisites
@@ -20,7 +20,7 @@ git clone --depth 1 --branch v6.18 \
     https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git linux-6.18
 cd linux-6.18
 
-git am /path/to/linux-charlotte-buildbot/patches/*.patch
+git am /path/to/linux-mainline-hisi-9000c/patches/*.patch
 ```
 
 The series is ordered (`0001` .. `0007`) and applies cleanly on a pristine
@@ -29,7 +29,7 @@ The series is ordered (`0001` .. `0007`) and applies cleanly on a pristine
 ## 2. Configure
 
 ```sh
-cp /path/to/linux-charlotte-buildbot/defconfig/charlotte_6.18_defconfig \
+cp /path/to/linux-mainline-hisi-9000c/defconfig/charlotte_6.18_defconfig \
    arch/arm64/configs/charlotte_defconfig
 make charlotte_defconfig
 ```
