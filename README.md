@@ -32,9 +32,11 @@ one-shot test entry (`grub-reboot`).
 | UFS (3 LUNs, 43 partitions) | yes | yes, HS-G4 / 2 lanes (~931 MB/s read) |
 | PCIe0 (onboard ASM1064 SATA) | yes | yes, Gen3 x1 + `ahci` |
 | PCIe1 (external x1 slot) | yes | driver ready, disabled until the slot rail is enabled |
+| USB Ethernet (RTL8153 / `r8152`) | yes | yes, 1000/full, DHCP + IPv6 |
 | amdgpu | not built | built-in, needs a card |
 | Display (vendor DPU/HDMI) | yes | not yet (vendor `dkmd` only) |
 | Rootfs chroot from initramfs | n/a | yes (`sdd2-chroot`, read-only by default) |
+| Network in initramfs | n/a | yes (`net-dhcp`) |
 
 ### Patch sources
 
@@ -88,6 +90,7 @@ is only selected through `grub-reboot`; the GRUB default must stay on 5.10.
 - Build guide (Ubuntu/Debian on the board): [English](docs/build_guide_ubuntu_en.md) | [中文](docs/build_guide_ubuntu_zh.md)
 - UFS bring-up notes: [中文](docs/ufs_bringup_zh.md)
 - PCIe / amdgpu notes: [中文](docs/pci_amdgpu_zh.md)
+- USB Ethernet / network notes: [中文](docs/net_bringup_zh.md)
 - Display bring-up plan: [中文](docs/display_bringup_zh.md)
 - Patch set and rootfs chroot: [中文](docs/rootfs_chroot_zh.md)
 - Full bring-up report: [中文](docs/bringup_report_zh.md)

@@ -1,0 +1,37 @@
+#!/bin/sh
+# Bring up the USB Ethernet adapter (Realtek RTL8153) with DHCP.
+#
+#   net-dhcp            use eth0
+#   net-dhcp IFACE      use another interface name
+#
+# The initramfs shipped with this repository carries the rtl_nic firmware
+# and a /bin/sh symlink, so udhcpc can run its bound/renew script.
+# A hard timeout makes sure a missing DHCP server never wedges the console.
+
+IF=${1:-eth0}
+
+ip link set "$IF" up
+
+cat > /tmp/udhcpc.sh <<'EOS'
+#!/bin/sh
+case "$1" in
+bound|renew)
+	mkdir -p /etc
+	ifconfig "$interface" "$ip" netmask "$mask" up
+	ip route add default via "$router" 2>/dev/null
+	: > /etc/resolv.conf
+	for d in $dns; do echo "nameserver $d" >> /etc/resolv.conf; done
+	;;
+esac
+EOS
+chmod +x /tmp/udhcpc.sh
+
+echo "net-dhcp: waiting for a lease on $IF (30s timeout)"
+timeout 30 udhcpc -i "$IF" -s /tmp/udhcpc.sh -q -n -t 6 -T 3
+rc=$?
+if [ $rc -ne 0 ]; then
+	echo "net-dhcp: no lease (rc=$rc); check the cable/switch"
+	exit $rc
+fi
+ip addr show "$IF"
+ip route

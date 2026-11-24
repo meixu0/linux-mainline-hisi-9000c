@@ -11,6 +11,7 @@ re-checked.
 | `6.18-pcie-link-up.log` | PCIe0 Gen3 x1 link up, ASM1064 SATA enumerated, `ahci` bound |
 | `6.18-sdd2-chroot-final.log` | initramfs `sdd2-chroot` into GXDE OS 25 and `uname -r` inside |
 | `6.18-repotest-boot.log` | kernel rebuilt from this repository (upstream v6.18 + patches + defconfig) booting on the board |
+| `6.18-net-r8152-boot.log` | USB Ethernet (RTL8153 / mainline `r8152`): link, DHCP, ICMP, DNS and HTTP |
 
 The `Linux version ...` banner in the logs contained the local build account;
 it has been redacted to `builder@buildhost`. It was a build identity, never a

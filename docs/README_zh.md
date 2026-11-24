@@ -85,6 +85,7 @@ GRUB 条目名为 `Linux 6.18 charlotte bring-up (TEST - uart console)`，
 - 构建指南（板端 Ubuntu/Debian）：[English](build_guide_ubuntu_en.md) | [中文](build_guide_ubuntu_zh.md)
 - UFS 移植笔记：[中文](ufs_bringup_zh.md)
 - PCIe / amdgpu 笔记：[中文](pci_amdgpu_zh.md)
+- USB 网卡 / 网络笔记：[中文](net_bringup_zh.md)
 - 显示移植计划：[中文](display_bringup_zh.md)
 - 补丁集与 rootfs chroot：[中文](rootfs_chroot_zh.md)
 - 完整移植报告：[中文](bringup_report_zh.md)

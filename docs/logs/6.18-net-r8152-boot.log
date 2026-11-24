@@ -1,0 +1,73 @@
+# 6.18 network bring-up excerpt (USB RTL8153 / mainline r8152)
+# full serial capture: 2026-11-24, curated excerpt
+
+Linux version 6.18.0-00007-g57305409a010 (builder@buildhost) (gcc (Debian 14.2.0-19) 14.2.0, GNU ld (GNU Binutils for Debian) 2.44) #54 SMP Tue Nov 24 12:01:24 CST 2026
+charlotte-pcie f8000000.pcie: PCIe Gen.3 x1 link up
+usbcore: registered new device driver r8152-cfgselector
+usbcore: registered new interface driver r8152
+ufshcd-charlotte fa500000.ufs: charlotte hufs: link up (state 0x100)
+sd 4:0:0:3: [sdd] 62385152 4096-byte logical blocks: (256 GB/238 GiB)
+r8152-cfgselector 2-1.1: reset SuperSpeed USB device number 3 using xhci-hcd
+r8152 2-1.1:1.0 eth0: v1.12.13
+r8152 2-1.1:1.0 eth0: carrier on
+ ip route replace default via ;; esac' > /tmp/u.sh
+case "" in bound|renew) ip addr flush dev ; ip addr add / dev ; ip route replace default via ;; esac
+ udhcpc: lease of 192.0.2.10 obtained from 192.0.2.1, lease time 43200
+> [6nip route replace default via $router
+ip route replace default via $router
+p udhcpc: lease of 192.0.2.10 obtained from 192.0.2.1, lease time 43200
+~ # [6nip route add default via 192.0.2.1
+    inet 192.0.2.10/24 scope global eth0
+default via 192.0.2.1 dev eth0 
+~ # [6nping -c 3 -W 2 192.0.2.1
+64 bytes from 192.0.2.1: seq=0 ttl=64 time=0.860 ms
+64 bytes from 192.0.2.1: seq=1 ttl=64 time=0.303 ms
+64 bytes from 192.0.2.1: seq=2 ttl=64 time=0.277 ms
+3 packets transmitted, 3 packets received, 0% packet loss
+speed: 1000 duplex: full
+~ # [6nping -c 2 -W 2 223.5.5.5
+n64 bytes from 223.5.5.5: seq=0 ttl=47 time=23.317 ms
+wget -O- -T64 bytes from 223.5.5.5: seq=1 ttl=47 time=23.133 ms
+2 packets transmitted, 2 packets received, 0% packet loss
+~ # nslookup www.baidu.com
+~ # wget -O- -T 8 http://mirrors.aliyun.com/debian/README 2>&1 | head -4
+wget: bad address 'mirrors.aliyun.com'
+~ # [6nnslookup www.baidu.com 192.0.2.1
+Name:	www.a.shifen.com
+Name:	www.a.shifen.com
+Name:	www.a.shifen.com
+Address: 153.3.238.127
+Name:	www.a.shifen.com
+Address: 153.3.238.28
+~ # [6nping -c 2 -W 2 mirrors.aliyun.com
+~ # [6nping -c 2 -W 3 mirrors.aliyun.com
+2 packets transmitted, 2 packets received, 0% packet loss
+~ # wget -O /tmp/README -T 10 http://mirrors.aliyun.com/debian/README && ls -l /
+README               100% |********************************|  1197  0:00:00 ETA
+ audhcpc: lease of 192.0.2.10 obtained from 192.0.2.1, lease time 43200
+~ # [6nping -c 2 -W 2 192.0.2.1
+    inet 192.0.2.10/24 brd 192.0.2.255 scope global eth0
+default via 192.0.2.1 dev eth0 
+ udhcpc: lease of 192.0.2.10 obtained from 192.0.2.1, lease time 43200
+    inet 192.0.2.10/24 brd 192.0.2.255 scope global eth0
+default via 192.0.2.1 dev eth0 
+~ # [6nping -c 2 -W 2 192.0.2.1
+64 bytes from 192.0.2.1: seq=0 ttl=64 time=0.313 ms
+64 bytes from 192.0.2.1: seq=1 ttl=64 time=0.166 ms
+2 packets transmitted, 2 packets received, 0% packet loss
+~ # [6nsdd2-chroot rw /bin/bash -c 'echo CHROOT_NET; ip -4 addr show eth0 | tail -2
+; ping -c 2 -W 3 223.5.5.5; getent hosts mirrors.aliyun.com'
+CHROOT_NET
+    inet 192.0.2.10/24 brd 192.0.2.255 scope global eth0
+64 bytes from 223.5.5.5: icmp_seq=1 ttl=47 time=23.5 ms
+64 bytes from 223.5.5.5: icmp_seq=2 ttl=47 time=23.2 ms
+2 packets transmitted, 2 received, 0% packet loss, time 1003ms
+119.36.231.159  mirrors.aliyun.com.w.alikunlun.com mirrors.aliyun.com
+119.36.231.158  mirrors.aliyun.com.w.alikunlun.com mirrors.aliyun.com
+119.36.231.196  mirrors.aliyun.com.w.alikunlun.com mirrors.aliyun.com
+119.36.231.195  mirrors.aliyun.com.w.alikunlun.com mirrors.aliyun.com
+119.36.231.157  mirrors.aliyun.com.w.alikunlun.com mirrors.aliyun.com
+119.36.231.156  mirrors.aliyun.com.w.alikunlun.com mirrors.aliyun.com
+ufshcd-charlotte fa500000.ufs: charlotte hufs: link up (state 0x100)
+ufshcd-charlotte fa500000.ufs: charlotte hufs: link up (state 0x100)
+r8152-cfgselector 2-1.1: USB disconnect, device number 3

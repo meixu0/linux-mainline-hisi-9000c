@@ -30,6 +30,21 @@ sdd2-chroot        # read-only, safe default
 sdd2-chroot rw     # read-write, only when you really need it
 ```
 
+## net-dhcp
+
+initramfs helper for the USB Ethernet adapter (Realtek RTL8153, mainline
+`r8152`).  It brings the link up first (otherwise `udhcpc` can spin on
+"Network is down"), gets a lease with a 30 s timeout, and writes
+`/etc/resolv.conf` from the DHCP `dns` option:
+
+```sh
+net-dhcp            # eth0
+net-dhcp eth1       # other interface name
+```
+
+The initramfs must contain `/bin/sh`, the `rtl_nic/*.fw` firmware and the
+script itself; `initramfs-console-init.sh` creates `/bin/sh` at boot.
+
 ## Initramfs scripts
 
 - `initramfs-console-init.sh`: mounts `proc`/`sys`/`dev`, prints the chroot
@@ -41,9 +56,11 @@ sdd2-chroot rw     # read-write, only when you really need it
 Build a console initramfs:
 
 ```sh
-mkdir -p initramfs/{bin,dev,proc,sys}
+mkdir -p initramfs/{bin,dev,proc,sys,etc,lib/firmware/rtl_nic}
 cp "$(command -v busybox)" initramfs/bin/
 ln -sf busybox initramfs/bin/sh
 install -m755 initramfs-console-init.sh initramfs/init
+install -m755 net-dhcp initramfs/net-dhcp
+cp /lib/firmware/rtl_nic/rtl8153*.fw initramfs/lib/firmware/rtl_nic/
 (cd initramfs && find . | cpio -o -H newc | gzip -9) > initramfs-console.cpio.gz
 ```
