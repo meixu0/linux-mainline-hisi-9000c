@@ -2,8 +2,7 @@
 
 日期：2026-11-24
 
-
-## 2. 5.10 上的 PCIe 现状（实测）
+## 1. 5.10 上的 PCIe 现状（实测）
 
 - 两个 kport 控制器：
 
@@ -19,7 +18,7 @@
 - 根端口归属 `f8000000.pci`，即 **板载 SATA 走 PCIe0**；
   x1 插槽走 **PCIe1**。
 
-## 3. 6.18 现状与已确认的坑
+## 2. 6.18 现状与已确认的坑
 
 - 6.18 配置里 `# CONFIG_PCI is not set`，DTS 里也没有 PCIe 节点。
 - **直接读 PCIe 寄存器会 SError**：6.18 冷启动后
@@ -29,7 +28,7 @@
 - 因此不能“只加 DT + 打开 CONFIG_PCI”就完事，必须先把
   时钟/PLL/PHY/复位/NoC 上电序列补上。
 
-## 4. 厂商上电序列（从 pcie-jun.c / pcie-kport*.c 提取）
+## 3. 厂商上电序列
 
 关键寄存器（PCIe0）：
 
@@ -77,7 +76,7 @@ APB   0xee0a3000:
 12. rx termination、退出 NoC power idle、DBI split 设置
 13. `dw_pcie_setup_rc()` + LTSSM enable + 等链路
 
-## 5. 6.18 实现（第一版）
+## 4. 6.18 实现（第一版）
 
 新增 `drivers/pci/controller/dwc/pcie-charlotte.c`：
 
@@ -102,7 +101,7 @@ APB   0xee0a3000:
   ... pci 0000:01:00.0: [1b21:1064] SATA controller
 ```
 
-## 6. amdgpu 与 x1 插槽的已知风险
+## 5. amdgpu 与 x1 插槽的已知风险
 
 **内存窗口太小**：x1 插槽只有 59 MB（PCIe1 的 ranges）。
 普通 AMD 亮机卡的 VRAM BAR 一般是 256 MB，无法放进这个窗口。
@@ -121,7 +120,7 @@ cat /sys/bus/pci/devices/0000:00:00.0/resource   # 桥窗口
   - 或者用 64 位窗口（CPU 地址 >4 GB，NoC 是否支持未知）。
 - 这一步要等有卡时用 5.10 实测，不能盲试。
 
-## 7. 下一步
+## 6. 下一步
 
 1. 编 6.18（PCIe0 + amdgpu 内置），串口验证 SATA 链路。
 2. 成功后加 PCIe1（x1 插槽）节点，验证空槽 `Link Fail` 不崩。
@@ -130,7 +129,7 @@ cat /sys/bus/pci/devices/0000:00:00.0/resource   # 桥窗口
 
 ---
 
-## 8. 结果：6.18 PCIe0（板载 SATA）已经打通
+## 7. 结果：6.18 PCIe0（板载 SATA）已经打通
 
 最终 Image：`/boot/linux-6.18-charlotte/Image`，md5 `8247f40db86c917609d81daac7efa5ef`
 （对应内核提交 `5730540 pci: dwc: add charlotte PCIe host support`，
