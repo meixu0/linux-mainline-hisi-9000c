@@ -750,9 +750,9 @@ Wayland 验证。优先 GL 路径：当前硬件加速已有成功证据，而 P
   Failed to initialize accelerated iGPU/dGPU framebuffer sharing: No EGL display
   Failed to setup: The GPU /dev/dri/card0 chosen as primary is not supported by EGL.
   ```
-- 同一时间内核连续打印 `amdgpu ... pin failed`，greeter 的 scanout
-  BO 在 56 MiB 可见 VRAM 窗口内 pin 失败；这可能是 EGL 初始化失败
-  的根因，而不是单纯的权限问题。
+- 同一时间内核连续打印 `amdgpu ... pin failed`；后续采样确认这是
+  greeter 在 EGL 失败后回退 shadow buffer 的下游症状，不是 EGL
+  失败的根因。详见 [scanout_bo_pin_zh.md](scanout_bo_pin_zh.md)。
 - greeter 失败后 `gdm3` 报 `GdmSession: no session desktop files
   installed, aborting...` 并以 SIGTRAP 退出，systemd 进入重启循环，
   直到 start-limit 后 gdm.service 失败。自动登录用户会话不受影响。
@@ -767,6 +767,8 @@ Wayland 验证。优先 GL 路径：当前硬件加速已有成功证据，而 P
   -> Mutter 选择 shadow buffer -> legacy set_base 要求连续 VRAM
   -> pin 失败。修复应优先恢复 greeter 的 EGL/GBM 路径，或在
   kernel 侧兼容“已 pin 但非连续”的 scanout BO，并验证显示无错位。
+  详细复现、采样和代码路径见
+  [scanout_bo_pin_zh.md](scanout_bo_pin_zh.md)。
 
 **切分辨率：vblank/IRQ 停摆与修复**
 
@@ -891,6 +893,7 @@ fence 和显示更新，避免 CPU 改写 GPU 正在读取的 staging 或显示
 - **GDM greeter / scanout pin**：优先修复 greeter `gnome-shell` 的
   EGL/shadow-buffer 路径；或在 kernel 里兼容“已 pin 但非连续”的
   scanout BO，并验证显示无错位。临时可用自动登录或 X11 greeter。
+  详见 [scanout_bo_pin_zh.md](scanout_bo_pin_zh.md)。
 - **pin/unpin 警告**：为 `dce_v6_0_crtc_do_set_base()` 的旧 FB
   unpin 加保护；继续定位 `ttm_bo_release` 的 pin 泄漏。
 - **DPM 空闲档位**：确认桌面空闲时长期 825/1000 是否由 WebKit/

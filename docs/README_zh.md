@@ -78,6 +78,7 @@ Linux 6.18 主线移植：构建脚本、补丁、内核配置、设备树和工
 - PCIe / amdgpu 笔记：[中文](pci_amdgpu_zh.md)
 - PCIe1 / FF-A / 64 位窗口：[中文](pcie1_ffa_bar_zh.md)
 - amdgpu 迁移记录：[中文](amdgpu_bringup_zh.md)
+- GDM greeter scanout BO pin 失败分析：[中文](scanout_bo_pin_zh.md)
 - 当前可用桌面：GNOME Wayland（amdgpu + radeonsi，DVI-I-1
   @3840x2160@30）；X11 GNOME 和 Weston 也可用。4K↔1080p 切换已由
   补丁 0015 修复并在 Wayland/X11 下复测。用户态 VRAM→GTT 策略让

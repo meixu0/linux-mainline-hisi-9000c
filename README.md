@@ -106,6 +106,7 @@ Kirin 9000C UFS/PCIe/clock blocks are different.
 - UFS bring-up notes: [中文](docs/ufs_bringup_zh.md)
 - PCIe / amdgpu notes: [中文](docs/pci_amdgpu_zh.md)
 - amdgpu bring-up and desktop evidence: [中文](docs/amdgpu_bringup_zh.md)
+- GDM greeter scanout BO pin analysis: [中文](docs/scanout_bo_pin_zh.md)
 - USB Ethernet / network notes: [中文](docs/net_bringup_zh.md)
 - Display bring-up plan: [中文](docs/display_bringup_zh.md)
 - Full bring-up report: [中文](docs/bringup_report_zh.md)
