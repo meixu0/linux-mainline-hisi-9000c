@@ -1,0 +1,46 @@
+From e5d7f7614f9acc12058d4d1a7b0336e87fecc563 Mon Sep 17 00:00:00 2001
+From: hisi-9000c buildbot <buildbot@localhost>
+Date: Thu, 26 Nov 2026 22:31:00 +0800
+Subject: [PATCH] drm/amdgpu: only unpin the old FB when legacy set_base pinned
+ it
+
+The legacy DCE set_base path can inherit an old framebuffer that was
+not pinned by this path, for example the fbdev framebuffer at the
+first modeset.  The unconditional amdgpu_bo_unpin() then hits
+ttm_bo_unpin()'s WARN_ON_ONCE(!bo->pin_count) and underflows.
+
+Drop the pin only when the old FB still has a pin.  This is the
+correct boundary for the legacy path, not a global pin-lifetime fix;
+the user-session startup pin-failed messages and the X11/DRI3
+ttm_bo_release warning remain separate issues.
+
+Tested on a Kirin 9000C with an Oland [1002:6611]: the session-start
+ttm_bo_unpin warning is gone.  GNOME Wayland runs at 4K@30 28.8 FPS,
+1080p@60 56.1 FPS, and back to 4K 29.6 FPS, with the amdgpu IRQ
+counter rising across the switches and no SError/reset.
+---
+ drivers/gpu/drm/amd/amdgpu/dce_v6_0.c | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/dce_v6_0.c b/drivers/gpu/drm/amd/amdgpu/dce_v6_0.c
+index 5e50cd6..4c1f802 100644
+--- a/drivers/gpu/drm/amd/amdgpu/dce_v6_0.c
++++ b/drivers/gpu/drm/amd/amdgpu/dce_v6_0.c
+@@ -2088,7 +2088,13 @@ static int dce_v6_0_crtc_do_set_base(struct drm_crtc *crtc,
+ 		r = amdgpu_bo_reserve(abo, true);
+ 		if (unlikely(r != 0))
+ 			return r;
+-		amdgpu_bo_unpin(abo);
++		/*
++		 * The legacy set_base path can inherit an old FB that was not
++		 * pinned here (for example the fbdev framebuffer).  Only drop
++		 * a pin this path actually holds.
++		 */
++		if (abo->tbo.pin_count)
++			amdgpu_bo_unpin(abo);
+ 		amdgpu_bo_unreserve(abo);
+ 	}
+ 
+-- 
+2.50.1 (Apple Git-155)
+

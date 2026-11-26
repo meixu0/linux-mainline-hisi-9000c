@@ -9,8 +9,9 @@
 > 当前状态：GNOME Wayland 可用，4K@30 vsync 约 29.7 FPS，1080p@60
 > 约 52–59 FPS；4K↔1080p 切换已由补丁 0015 修复，并在 Wayland/X11
 > 下做过往返和压力测试。GDM greeter 已修复（板级 PAM 环境注入的
-> SoC 显示兼容库与 dGPU EGL 冲突）；仍有 `ttm_bo_unpin` /
-> `ttm_bo_release` WARNING 等非阻塞问题。详见 8.8–8.10。
+> SoC 显示兼容库与 dGPU EGL 冲突）；`ttm_bo_unpin` 启动告警已由
+> 补丁 0016 修复；`ttm_bo_release` 和启动时 `pin failed` 仍是非阻塞
+> 观察项。详见 8.8–8.11。
 >
 > 本文第 8 节给出复核结论、实测记录和证据边界；radeon 仍是已验证的
 > 可用回退。
@@ -42,7 +43,7 @@
 | 硬件渲染 | **通过**：`glxinfo`/`eglinfo` 报告 `direct rendering: Yes`、`radeonsi/oland`、GL 4.6、GLES 3.2 |
 | vsync 性能 | GNOME Wayland 4K@30 约 29.7 FPS、1080p@60 约 52–59 FPS；关 vsync 3139 FPS；Weston 1080p 33 FPS / 4K 17 FPS |
 | 555 秒停顿 | 第 2 轮出现一次（554.9 秒）；第 3 轮未复现（`dri2`→`glamoregl` 仅 0.263 秒） |
-| 切分辨率 | **已修复（补丁 0015）**：Wayland 4K↔1080p 往返和 X11 4K→1080p→4K 均正常；仍偶见 `ttm_bo_unpin`/`ttm_bo_release` WARNING（非致命） |
+| 切分辨率 | **已修复（补丁 0015）**：Wayland 4K↔1080p 往返和 X11 4K→1080p→4K 均正常；`ttm_bo_unpin` 启动告警已由 0016 修复，`ttm_bo_release` 仍可能（非致命） |
 | LightDM greeter | `SWcursor` 已消除 pinned 光标 BO 循环；scanout BO 仍有 VRAM↔GTT 往返 |
 | 整机稳定性 | GNOME Wayland / X11 / Weston 连续运行，无 SError、无 panic、无 GPU reset |
 
@@ -766,7 +767,8 @@ Wayland 验证。优先 GL 路径：当前硬件加速已有成功证据，而 P
   分支，这正是返回 `-EINVAL` 的条件。
 - 该 BO 来自 `No EGL display` 后的 shadow buffer 路径：EGL 失败
   -> Mutter 选择 shadow buffer -> legacy set_base 要求连续 VRAM
-  -> pin 失败。修复 EGL 后不再触发；不需要修改 kernel 的 pin 逻辑。
+  -> pin 失败。修复 EGL 后不再触发；不需要为 greeter 的 shadow
+  buffer 修改 kernel 的 pin 逻辑。
   详细复现、采样和代码路径见
   [scanout_bo_pin_zh.md](scanout_bo_pin_zh.md)。
 
@@ -786,8 +788,9 @@ Wayland 验证。优先 GL 路径：当前硬件加速已有成功证据，而 P
   `No EGL display`、`gdm3` SIGTRAP 重启循环以及 greeter 的
   `pin failed` 都消失；用户会话不受影响，4K Wayland 正常
   （`es2gears_wayland` 约 27.7 FPS）。
-- scanout BO pin 失败是 EGL 失败后的 shadow buffer 下游症状；
-  修复 EGL 后不再触发，不需要修改 kernel 的 pin 逻辑。
+- greeter 的 scanout BO pin 失败是 EGL 失败后的 shadow buffer
+  下游症状；修复 EGL 后不再触发，不需要为它修改 kernel 的 pin
+  逻辑（补丁 0016 只修旧 FB 的 unpin 边界）。
 - 非致命的 `pin failed` 仍可能在用户会话启动时出现（旧 FB 的
   pin/unpin 计数问题），不阻塞显示，属于独立清理项。
 
@@ -817,11 +820,11 @@ Wayland 验证。优先 GL 路径：当前硬件加速已有成功证据，而 P
 
 - LightDM greeter 的 pinned 光标 BO 循环已由 Xorg `SWcursor` 消除；
   Xorg scanout BO 仍有 VRAM↔GTT 往返。
-- 启动时 `dce_v6_0_crtc_do_set_base()` 会对旧 FB 触发一次
-  `ttm_bo_unpin` WARNING（`pin_count` 已为 0）；X11 客户端退出时
-  偶见 `ttm_bo_release` WARNING（BO 仍带 pin）。两者都不阻塞显示，
-  和 vblank 中断停摆是独立问题。两者均需追踪 DRI3/scanout 的 pin
-  生命周期；`pin_count` 判断最多是临时防护，不能作为根因修复。
+- 补丁 0016 在 legacy set_base 里只在旧 FB 确实持有 pin 时才 unpin，
+  启动时的 `ttm_bo_unpin` WARNING 已消失。用户会话启动时仍可能
+  出现非致命的 `pin failed`；X11 客户端退出时的 `ttm_bo_release`
+  WARNING 仍需单独查 DRI3/scanout 的 pin 生命周期。两者都不阻塞
+  显示，和 vblank 中断停摆无关。
 - GNOME Wayland 可用；4K↔1080p 切换已验证。GDM 自动登录后
   GNOME 会话初始化（UPower/colord/IBus 等 D-Bus 超时）可能需要
   1–2 分钟，期间太早启动 Wayland 客户端可能等不到 frame callback；
@@ -857,11 +860,12 @@ greeter EGL 修复后不再回退 shadow buffer，因此不需要再为 greeter
 真正连续；需要在首次 pin 前满足显示要求，或使用独立、满足连续性
 要求的 scanout 缓冲。画面短时正常也不能代替分配条件的正确性。
 
-**3. 独立修两个 pin 生命周期告警**
+**3. 收尾两个 pin 生命周期告警**
 
-unpin 时计数为零、释放时仍带 pin，是两个需要追踪的失配点，不能
-假设互相抵消。沿新旧 FB 交接、失败回滚和会话退出记录配对关系。
-增加 `pin_count` 判断最多是临时防护，不能作为根因修复。
+unpin 下溢已由补丁 0016 在 legacy set_base 的旧 FB 边界处修复：
+只有旧 FB 确实持有 pin 时才 unpin。X11 客户端退出时释放仍带 pin
+的 `ttm_bo_release` 告警仍需单独追踪，沿 DRI3/scanout 的 pin
+生命周期记录配对关系；不能假设两者互相抵消。
 
 同时核对当前镜像是否仍含旧的 `-EBUSY → VM_FAULT_NOPAGE` 分支。
 `SWcursor` 已绕过触发条件，但不代表 fault 返回语义已修好；第 8.9
@@ -882,7 +886,7 @@ greeter EGL 已修复；下一轮做完整往返验收：
 greeter 硬件加速启动 → 登录 Wayland → 退出回 greeter
 ```
 
-同时继续收尾非致命 pin/unpin 警告和 IRQ 生命周期。Xwayland 功能
+同时继续收尾非致命 `pin failed`/`ttm_bo_release` 警告和 IRQ 生命周期。Xwayland 功能
 验证随后进行；扩大窗口、完整 staging 和 Weston 半刷新率优化暂排
 在上述工作之后。
 
@@ -972,9 +976,9 @@ fence 和显示更新，避免 CPU 改写 GPU 正在读取的 staging 或显示
 - **GDM greeter EGL（已修复）**：根因是 greeter 的 PAM 环境注入
   面向 SoC 显示栈的兼容库；去除后 greeter 以 Wayland 启动。详见
   [scanout_bo_pin_zh.md](scanout_bo_pin_zh.md)。
-- **BO 生命周期**：用户会话启动时的非致命 `pin failed` 和
-  `ttm_bo_unpin`/`ttm_bo_release` 告警仍待清理；分别修复 unpin
-  计数为零和释放时仍带 pin 的失配，并核实 pinned fault 返回语义。
+- **BO 生命周期**：`ttm_bo_unpin` 下溢已由补丁 0016 修复；
+  用户会话启动时的非致命 `pin failed` 和 X11 客户端退出时的
+  `ttm_bo_release` 告警仍待清理；核实 pinned fault 返回语义。
 - **IRQ 生命周期**：保留 0015 基线，验证输出关闭、DPMS、VT 切换
   和 compositor 退出，统一补丁的原因说明。
 - **Xwayland 使用**：随后在 GNOME Wayland 下运行 X11 应用，验证

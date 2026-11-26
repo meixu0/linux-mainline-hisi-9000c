@@ -61,6 +61,7 @@ Kirin 9000C UFS/PCIe/clock blocks are different.
 - `0013`: add the SI PASID TLB flush callback
 - `0014`: use I/O accessors for SI reset magic and UVD messages
 - `0015`: restore DCE vblank/pageflip IRQs after a modeset
+- `0016`: only unpin the old FB when legacy set_base pinned it
 
 ### Known issues / current work
 
@@ -70,15 +71,16 @@ Kirin 9000C UFS/PCIe/clock blocks are different.
   EGL/GBM; with it disabled the greeter obtains a high-priority EGL
   context and starts Wayland. The user session is unaffected. The
   earlier scanout BO `pin failed` was a shadow-buffer symptom of the
-  EGL failure; no kernel pin change is needed. Details:
+  EGL failure; no kernel pin change is needed for that path. Patch
+  0016 only fixes the old-FB unpin boundary. Details:
   [中文](docs/scanout_bo_pin_zh.md).
 - 4K↔1080p mode switching is fixed by patch 0015 (restore the DCE
   vblank/pageflip IRQ masks after a modeset). Verified under GNOME
-  Wayland (six switches under load) and X11. A `ttm_bo_unpin` warning
-  can still appear from `dce_v6_0_crtc_do_set_base` at session start
-  (old FB has `pin_count == 0`), and `ttm_bo_release` can warn when an
-  X11 client exits (BO still pinned); neither is fatal and both are
-  separate from the IRQ fix.
+  Wayland (six switches under load) and X11. The session-start
+  `ttm_bo_unpin` warning is fixed by patch 0016: the legacy set_base
+  path now unpins the old FB only when it holds a pin. The user-session
+  startup `pin failed` messages and the X11-client-exit
+  `ttm_bo_release` warning remain; neither is fatal.
 - GNOME session startup can take 1–2 minutes because UPower/colord/IBus
   D-Bus activations time out; Wayland clients started too early may
   block on frame callbacks.

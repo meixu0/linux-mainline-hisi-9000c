@@ -64,6 +64,7 @@ Linux 6.18 主线移植：构建脚本、补丁、内核配置、设备树和工
 - `0013`：补上 SI 的 PASID TLB flush 回调
 - `0014`：reset magic 和 UVD 消息缓冲区改用 I/O 访问器
 - `0015`：modeset 后恢复 DCE vblank/pageflip 中断掩码，修复 4K↔1080p 切换
+- `0016`：legacy set_base 只对确实持有 pin 的旧 FB 做 unpin，消除启动时 ttm_bo_unpin WARNING
 - 实测与证据见 [amdgpu_bringup_zh.md](amdgpu_bringup_zh.md)
 
 ### 工具

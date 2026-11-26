@@ -300,13 +300,15 @@ VRAM 的帧缓冲内容。
 
 ## 6. 当前状态与遗留
 
-1. **amdgpu 已迁移并可用**：X11 GNOME 桌面和 Weston Wayland 均已跑通
-   （radeonsi/GLES 3.2）。GNOME Wayland 目前受 6.18 缺
-   `CONFIG_TMPFS_POSIX_ACL`/`CONFIG_TMPFS_XATTR` 阻塞，正在重建内核。
+1. **amdgpu 已迁移并可用**：X11 GNOME、Weston 和 GNOME Wayland 均已
+   跑通（radeonsi/GLES 3.2）；ACL/XATTR 配置已补齐，GDM greeter 的
+   板级 PAM 显示兼容库注入已禁用。
 2. **诊断打印**：仓库补丁已清理掉大部分 `DIAG618` 打印；板上工作树
    仍保留少量定位输出，正式镜像前应移除。
-3. **桌面栈**：X11 和 Weston 已验证；X11 切分辨率仍有
-   `ttm_bo_unpin` 不平衡，Wayland 呈现路径在 vsync 下只有半刷新率。
+3. **桌面栈**：X11、Weston 和 GNOME Wayland 已验证；4K↔1080p
+   切换由补丁 0015 修复，启动 `ttm_bo_unpin` 告警由 0016 修复。
+   `ttm_bo_release` / 启动 `pin failed` 仍是非致命观察项；Weston
+   vsync 半刷新率仍待优化。
 4. **视频硬解**：UVD 固件已内嵌，但未单独验证硬解；非阻塞项。
 
 ## 7. 已被推翻、不要重复的结论

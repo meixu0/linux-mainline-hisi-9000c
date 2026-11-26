@@ -30,11 +30,12 @@ Registering session with GDM
 ```
 
 `No EGL display`、`gdm3` SIGTRAP 循环和 greeter 的 `pin failed`
-消失。用户会话不受影响，4K Wayland 正常。**因此不需要修改 kernel
-的 pin 逻辑。**
+消失。用户会话不受影响，4K Wayland 正常。**因此不需要为 greeter
+的 shadow-buffer pin 失败修改 kernel 的 pin 逻辑。**
 
-非致命的 `pin failed` 仍可能在用户会话启动时出现（旧 FB 的
-pin/unpin 计数问题），但不阻塞显示，属于单独的清理项。
+非致命的 `pin failed` 仍可能在用户会话启动时出现（scanout BO
+的连续 pin 条件），但不阻塞显示，属于单独的清理项。legacy
+set_base 的旧 FB unpin 下溢已由补丁 0016 修复。
 
 ## 修复结果（2026-11-26）
 
@@ -44,6 +45,9 @@ pin/unpin 计数问题），但不阻塞显示，属于单独的清理项。
   name 'wayland-0'`，并 `Registering session with GDM`。
 - 恢复自动登录后用户会话仍为 Wayland；4K 下
   `es2gears_wayland` 约 27.7 FPS，DPMS On。
+- 补丁 0016：legacy set_base 只在旧 FB 确实持有 pin 时 unpin；
+  新内核启动日志中 `ttm_bo_unpin` 警告消失，4K↔1080p 回归通过。
+
 
 ## 复现步骤
 
@@ -163,7 +167,8 @@ if (bo->tbo.pin_count) {
   正常；自动登录不再是规避手段。
 - 如果其他板或镜像也向 greeter 注入了面向 SoC 显示栈的兼容库，
   应只在 SoC 显示会话启用，不要加载到 AMD dGPU 的 greeter。
-- 非致命的 `ttm_bo_unpin`/`ttm_bo_release` WARNING 仍属独立问题；
+- 非致命的 `ttm_bo_unpin` 下溢已由补丁 0016 修复；
+  `ttm_bo_release` 和用户会话启动时的 `pin failed` 仍属独立问题；
   不要把“已 pin 但非连续”的 BO 直接交给显示控制器。
 - 该问题与补丁 0015 的 vblank/IRQ 修复无关；4K↔1080p 切换仍正常。
 
@@ -175,9 +180,10 @@ if (bo->tbo.pin_count) {
 2. **shadow buffer（不再需要）**：greeter 不再回退 shadow buffer；
    本节的 pin 分析保留为诊断证据。
 3. **kernel 兼容（不需要）**：不需要修改 `dce_v6_0` 或
-   `amdgpu_bo_pin()` 来接受非连续 scanout BO。
-4. **非致命 pin/unpin 警告（待处理）**：单独清理
-   `ttm_bo_unpin`/`ttm_bo_release` 和用户会话启动时的 `pin failed`。
+   `amdgpu_bo_pin()` 来接受非连续 scanout BO（补丁 0016 只修旧
+   FB 的 unpin 边界）。
+4. **非致命 pin/unpin 警告**：`ttm_bo_unpin` 下溢已由补丁 0016
+   修复；`ttm_bo_release` 和用户会话启动时的 `pin failed` 仍待清理。
 5. **Xwayland 使用**：仍在主文档 TODO 中，后续验证 X11 应用。
 
 ## 证据边界
@@ -193,6 +199,8 @@ if (bo->tbo.pin_count) {
   扫描”的实际画面行为没有测试；修复后也不再需要测试。
 - `[fbcon]` 的 4K framebuffer 仍存在；它在其他场景下仍可能占用
   可见窗口，是独立的容量问题。
+- 补丁 0016 的验证：新内核启动后 `ttm_bo_unpin` 不再出现在
+  kernel log；4K→1080p→4K 的 FPS/IRQ 回归通过。
 
 ## 参考
 

@@ -12,10 +12,10 @@
 > [`mariobalanica/arm-pcie-gpu-patches`](https://github.com/mariobalanica/arm-pcie-gpu-patches)，
 > 其中 0001/0002/0003 分别对应“Device 映射 + 对齐修复 + sysmem 强制 WC”。
 >
-> **2026-11-26 更新**：同样的修正已迁移到 amdgpu，X11 GNOME 桌面和
-> Weston Wayland 均可用（radeonsi/GLES 3.2）。GNOME Wayland 目前受
-> 6.18 缺 `CONFIG_TMPFS_POSIX_ACL`/`XATTR` 阻塞，正在重建；剩余现象、
-> 补丁编号和证据边界见 [`amdgpu_bringup_zh.md`](amdgpu_bringup_zh.md)。
+> **2026-11-26 更新**：同样的修正已迁移到 amdgpu，X11 GNOME、Weston
+> 和 GNOME Wayland 均可用（radeonsi/GLES 3.2）；ACL/XATTR 配置已补齐，
+> GDM greeter 的板级 PAM 显示兼容库注入已禁用。剩余现象、补丁编号和
+> 证据边界见 [`amdgpu_bringup_zh.md`](amdgpu_bringup_zh.md)。
 
 ## 1. 5.10 上的 PCIe 现状（实测）
 
@@ -140,8 +140,10 @@ cat /sys/bus/pci/devices/0000:00:00.0/resource   # 桥窗口
 1. 6.18 的 PCIe0（板载 SATA）和 PCIe1（x1 插槽）链路都已打通。
 2. amdgpu 已迁移并可用：X11 GNOME 桌面和 Weston Wayland 均跑通
    （radeonsi/GLES 3.2）。
-3. GNOME Wayland 目前受 6.18 缺 `CONFIG_TMPFS_POSIX_ACL`/`XATTR`
-   阻塞，正在重建内核；X11 切分辨率仍有 `ttm_bo_unpin` 不平衡。
+3. GNOME Wayland 和 GDM greeter 已可用（greeter 的板级 PAM 显示
+   兼容库注入已禁用）；4K↔1080p 切换由补丁 0015 修复，启动
+   `ttm_bo_unpin` 告警由 0016 修复。`ttm_bo_release` 和启动
+   `pin failed` 仍是非致命观察项。
 4. 详细证据见 [`amdgpu_bringup_zh.md`](amdgpu_bringup_zh.md) 第 8 节。
 
 ---
