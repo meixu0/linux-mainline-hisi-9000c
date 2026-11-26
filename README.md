@@ -65,14 +65,17 @@ Kirin 9000C UFS/PCIe/clock blocks are different.
 ### Known issues / current work
 
 - GNOME Wayland works when only the Wayland session is available; GDM's
-  greeter may still log `No EGL display` and fall back to X11. With
-  autologin the Wayland user session is unaffected.
+  greeter fails EGL (`No EGL display`) and, with all X11 session files
+  hidden, `gdm3` aborts with `no session desktop files installed` and
+  enters a restart loop. The greeter also logs `amdgpu ... pin failed`;
+  the Wayland user session is unaffected while autologin is enabled.
 - 4K↔1080p mode switching is fixed by patch 0015 (restore the DCE
   vblank/pageflip IRQ masks after a modeset). Verified under GNOME
   Wayland (six switches under load) and X11. A `ttm_bo_unpin` warning
-  can still appear from `dce_v6_0_crtc_do_set_base` at session start,
-  and `ttm_bo_release` can warn when an X11 client exits; neither is
-  fatal and both are separate from the IRQ fix.
+  can still appear from `dce_v6_0_crtc_do_set_base` at session start
+  (old FB has `pin_count == 0`), and `ttm_bo_release` can warn when an
+  X11 client exits (BO still pinned); neither is fatal and both are
+  separate from the IRQ fix.
 - GNOME session startup can take 1–2 minutes because UPower/colord/IBus
   D-Bus activations time out; Wayland clients started too early may
   block on frame callbacks.
@@ -80,8 +83,13 @@ Kirin 9000C UFS/PCIe/clock blocks are different.
   17 FPS at 4K30); with `vblank_mode=0` it reaches ~148 FPS / 115 FPS.
   This is a presentation-path issue (legacy non-atomic DRM), not GPU
   rendering capacity.
-- The GPU may idle at power level 0 (30 MHz). For tests, force
-  `power_dpm_force_performance_level=high` (825/1000 MHz).
+- GPU DPM works: `low` = 300/300 MHz, `high` = 825/1000 MHz, and
+  `auto` ramps to 825/1000 within ~1 s under load and falls back to
+  300/300 within ~10 s with GDM stopped. `amdgpu_pm_info` values are
+  in 10 kHz units (30000 = 300 MHz). The desktop can stay at
+  825/1000 because of compositor/WebKit background activity.
+- TODO: exercise Xwayland under GNOME Wayland (X11 apps, DRI3, input,
+  HiDPI scaling).
 
 ### Tools
 

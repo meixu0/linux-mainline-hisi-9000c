@@ -717,10 +717,14 @@ Wayland 验证。优先 GL 路径：当前硬件加速已有成功证据，而 P
 
 **GPU 频率**
 
-- 空闲时 `amdgpu_pm_info` 可能停在 power level 0（30 MHz）；
-  `power_dpm_force_performance_level=high` 可到 825/1000 MHz。
-- 强制 high 后 vsync FPS 不变（仍受呈现路径限制），但 no-vsync
-  吞吐明显提高。DPM auto 的升频策略仍需观察。
+- `amdgpu_pm_info` 的 sclk/mclk 单位是 10 kHz：power level 0 为
+  300/300 MHz，level 3 为 825/1000 MHz（不是 30/30 MHz）。
+- `power_dpm_force_performance_level=low` 可稳定到 300/300 MHz，
+  `high` 到 825/1000 MHz；`auto` 在无 vsync 负载下约 1 秒升到
+  825/1000，停掉 GDM（无合成器/客户端）后约 10 秒回落 300/300。
+- 桌面运行时可能长期停在 825/1000，主要是 Mutter/WebKit 等后台
+  GPU 活动加上 DPM 滞后；不是 DPM 失效。SI 的 `pp_dpm_sclk` /
+  `pp_dpm_mclk` 为空，当前档位只能从 `amdgpu_pm_info` 读。
 
 **GDM / GNOME Wayland（可用，但会话选择有坑）**
 
@@ -736,6 +740,24 @@ Wayland 验证。优先 GL 路径：当前硬件加速已有成功证据，而 P
   GPU 渲染无问题。
 - GDM greeter 仍可能打印 `No EGL display` 并回退 X11，但 autologin
   的 Wayland 用户会话不受影响；这是 greeter 的独立问题。
+
+**GDM greeter 复测（2026-11-26，关闭自动登录）**
+
+- 在只保留 Wayland `gnome.desktop`、关闭自动登录后，greeter 的
+  `gnome-shell` 报：
+  ```
+  Failed creating base context during opening of kernel driver.
+  Failed to initialize accelerated iGPU/dGPU framebuffer sharing: No EGL display
+  Failed to setup: The GPU /dev/dri/card0 chosen as primary is not supported by EGL.
+  ```
+- 同一时间内核连续打印 `amdgpu ... pin failed`，greeter 的 scanout
+  BO 在 56 MiB 可见 VRAM 窗口内 pin 失败；这可能是 EGL 初始化失败
+  的根因，而不是单纯的权限问题。
+- greeter 失败后 `gdm3` 报 `GdmSession: no session desktop files
+  installed, aborting...` 并以 SIGTRAP 退出，systemd 进入重启循环，
+  直到 start-limit 后 gdm.service 失败。自动登录用户会话不受影响。
+- 规避：保留自动登录；或恢复一个 X11 session 文件，让 greeter 有
+  X11 回退。彻底修复需要先查清 greeter scanout BO 的 pin 失败。
 
 **切分辨率：vblank/IRQ 停摆与修复**
 
@@ -763,9 +785,11 @@ Wayland 验证。优先 GL 路径：当前硬件加速已有成功证据，而 P
 
 - LightDM greeter 的 pinned 光标 BO 循环已由 Xorg `SWcursor` 消除；
   Xorg scanout BO 仍有 VRAM↔GTT 往返。
-- 启动时 `dce_v6_0_crtc_do_set_base()` 仍会触发一次 `ttm_bo_unpin`
-  WARNING；X11 客户端退出时偶见 `ttm_bo_release` WARNING。两者都
-  不阻塞显示，和 vblank 中断停摆是独立问题。
+- 启动时 `dce_v6_0_crtc_do_set_base()` 会对旧 FB 触发一次
+  `ttm_bo_unpin` WARNING（`pin_count` 已为 0）；X11 客户端退出时
+  偶见 `ttm_bo_release` WARNING（BO 仍带 pin）。两者都不阻塞显示，
+  和 vblank 中断停摆是独立问题；前者可在 legacy set_base 里加
+  `pin_count` 判断规避，后者需继续查 DRI3/scanout 的 pin 生命周期。
 - GNOME Wayland 可用；4K↔1080p 切换已验证。GDM 自动登录后
   GNOME 会话初始化（UPower/colord/IBus 等 D-Bus 超时）可能需要
   1–2 分钟，期间太早启动 Wayland 客户端可能等不到 frame callback；
@@ -849,3 +873,16 @@ fence 和显示更新，避免 CPU 改写 GPU 正在读取的 staging 或显示
   确需 CPU 更新 VRAM 输出内容时，继续设计第 9.3 节的中转路径。
 - **扩大窗口：** 作为独立的平台能力调查，不代替 fault 返回值和
   BO 生命周期修复。
+
+## 10. TODO
+
+- **Xwayland 使用**：在 GNOME Wayland 下运行 X11 应用（xterm、
+  glxgears、浏览器等），确认 Xwayland 走 radeonsi/DRI3、输入、
+  窗口缩放和 vsync 正常；记录 Xwayland 与原生 Wayland 的差异。
+- **GDM greeter**：查清 greeter `gnome-shell` 的 EGL/pin 失败；
+  在保留 Wayland 用户会话的前提下，决定修复 EGL 或恢复 X11
+  greeter 回退。
+- **pin/unpin 警告**：为 `dce_v6_0_crtc_do_set_base()` 的旧 FB
+  unpin 加保护；继续定位 `ttm_bo_release` 的 pin 泄漏。
+- **DPM 空闲档位**：确认桌面空闲时长期 825/1000 是否由 WebKit/
+  合成器后台活动导致，必要时调整 DPM 策略或验证电池模式。
