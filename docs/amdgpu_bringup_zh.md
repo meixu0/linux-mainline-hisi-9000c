@@ -8,8 +8,9 @@
 >
 > 当前状态：GNOME Wayland 可用，4K@30 vsync 约 29.7 FPS，1080p@60
 > 约 52–59 FPS；4K↔1080p 切换已由补丁 0015 修复，并在 Wayland/X11
-> 下做过往返和压力测试。仍有 GDM greeter 的 EGL 回退、`ttm_bo_unpin`
-> / `ttm_bo_release` WARNING 等非阻塞问题。详见 8.8–8.10。
+> 下做过往返和压力测试。GDM greeter 已修复（板级 PAM 环境注入的
+> SoC 显示兼容库与 dGPU EGL 冲突）；仍有 `ttm_bo_unpin` /
+> `ttm_bo_release` WARNING 等非阻塞问题。详见 8.8–8.10。
 >
 > 本文第 8 节给出复核结论、实测记录和证据边界；radeon 仍是已验证的
 > 可用回退。
@@ -37,6 +38,7 @@
 | X11 桌面 | **通过**：amdgpu DDX + glamor/radeonsi + DRI3，GNOME X11 桌面可用 |
 | Weston Wayland | **通过**：DRM 输出 + radeonsi/GLES 3.2，鼠标键盘和终端正常 |
 | GNOME Wayland | **可用**：4K@30 vsync 约 29.7 FPS，1080p@60 约 52–59 FPS；4K↔1080p 切换已修复（补丁 0015） |
+| GDM greeter | **已修复**：去除 greeter 的板级 SoC 显示兼容库注入后，Wayland greeter 正常；用户会话不受影响 |
 | 硬件渲染 | **通过**：`glxinfo`/`eglinfo` 报告 `direct rendering: Yes`、`radeonsi/oland`、GL 4.6、GLES 3.2 |
 | vsync 性能 | GNOME Wayland 4K@30 约 29.7 FPS、1080p@60 约 52–59 FPS；关 vsync 3139 FPS；Weston 1080p 33 FPS / 4K 17 FPS |
 | 555 秒停顿 | 第 2 轮出现一次（554.9 秒）；第 3 轮未复现（`dri2`→`glamoregl` 仅 0.263 秒） |
@@ -738,8 +740,8 @@ Wayland 验证。优先 GL 路径：当前硬件加速已有成功证据，而 P
   vsync `es2gears` 约 29.7 FPS（对应 30 Hz），60 秒稳定；
   1080p@60 时约 52–59 FPS；`vblank_mode=0` 时达到 **3139 FPS**，
   GPU 渲染无问题。
-- GDM greeter 仍可能打印 `No EGL display` 并回退 X11，但 autologin
-  的 Wayland 用户会话不受影响；这是 greeter 的独立问题。
+- 修复前 GDM greeter 会打印 `No EGL display` 并回退 X11；根因和
+  修复见下方“GDM greeter 修复”段。
 
 **GDM greeter 复测（2026-11-26，关闭自动登录）**
 
@@ -756,8 +758,7 @@ Wayland 验证。优先 GL 路径：当前硬件加速已有成功证据，而 P
 - greeter 失败后 `gdm3` 报 `GdmSession: no session desktop files
   installed, aborting...` 并以 SIGTRAP 退出，systemd 进入重启循环，
   直到 start-limit 后 gdm.service 失败。自动登录用户会话不受影响。
-- 规避：保留自动登录；或恢复一个 X11 session 文件，让 greeter 有
-  X11 回退。彻底修复需要先查清 greeter scanout BO 的 pin 失败。
+- 修复前可保留自动登录或 X11 greeter 回退；修复后不需要这些规避。
 - 2026-11-26 采样确认：失败时可见窗口只用了 4.7 MiB（总 56 MiB），
   VRAM 总用量 36.8 MiB，不是窗口耗尽。greeter 的 4K BO 已
   `pin count 1` 且带 `VRAM_CONTIGUOUS` 标志，但底层 TTM resource
@@ -765,10 +766,30 @@ Wayland 验证。优先 GL 路径：当前硬件加速已有成功证据，而 P
   分支，这正是返回 `-EINVAL` 的条件。
 - 该 BO 来自 `No EGL display` 后的 shadow buffer 路径：EGL 失败
   -> Mutter 选择 shadow buffer -> legacy set_base 要求连续 VRAM
-  -> pin 失败。修复应优先恢复 greeter 的 EGL/GBM 路径，或在
-  kernel 侧兼容“已 pin 但非连续”的 scanout BO，并验证显示无错位。
+  -> pin 失败。修复 EGL 后不再触发；不需要修改 kernel 的 pin 逻辑。
   详细复现、采样和代码路径见
   [scanout_bo_pin_zh.md](scanout_bo_pin_zh.md)。
+
+**GDM greeter 修复（2026-11-26）**
+
+- 根因不是权限、Mesa 或内核 pin 逻辑，而是 GDM greeter 的 PAM
+  环境文件向 greeter 注入了面向 SoC 显示栈的兼容库；该兼容库与
+  AMD dGPU 的 EGL/GBM 冲突，导致 `gnome-shell` 创建 EGL context
+  失败（`No EGL display`）并回退 shadow buffer。
+- 注释该 `pam_env` 行、让 dGPU greeter 使用干净的 EGL/GBM 环境后，
+  greeter 的 `gnome-shell` 输出：
+  ```
+  Obtained a high priority EGL context
+  Using Wayland display name 'wayland-0'
+  Registering session with GDM
+  ```
+  `No EGL display`、`gdm3` SIGTRAP 重启循环以及 greeter 的
+  `pin failed` 都消失；用户会话不受影响，4K Wayland 正常
+  （`es2gears_wayland` 约 27.7 FPS）。
+- scanout BO pin 失败是 EGL 失败后的 shadow buffer 下游症状；
+  修复 EGL 后不再触发，不需要修改 kernel 的 pin 逻辑。
+- 非致命的 `pin failed` 仍可能在用户会话启动时出现（旧 FB 的
+  pin/unpin 计数问题），不阻塞显示，属于独立清理项。
 
 **切分辨率：vblank/IRQ 停摆与修复**
 
@@ -799,19 +820,78 @@ Wayland 验证。优先 GL 路径：当前硬件加速已有成功证据，而 P
 - 启动时 `dce_v6_0_crtc_do_set_base()` 会对旧 FB 触发一次
   `ttm_bo_unpin` WARNING（`pin_count` 已为 0）；X11 客户端退出时
   偶见 `ttm_bo_release` WARNING（BO 仍带 pin）。两者都不阻塞显示，
-  和 vblank 中断停摆是独立问题；前者可在 legacy set_base 里加
-  `pin_count` 判断规避，后者需继续查 DRI3/scanout 的 pin 生命周期。
+  和 vblank 中断停摆是独立问题。两者均需追踪 DRI3/scanout 的 pin
+  生命周期；`pin_count` 判断最多是临时防护，不能作为根因修复。
 - GNOME Wayland 可用；4K↔1080p 切换已验证。GDM 自动登录后
   GNOME 会话初始化（UPower/colord/IBus 等 D-Bus 超时）可能需要
   1–2 分钟，期间太早启动 Wayland 客户端可能等不到 frame callback；
   等会话稳定后再测。
+
+### 8.11 最新复核：greeter EGL 已修复，收尾 BO 生命周期
+
+复核主文档、[scanout BO 分析](scanout_bo_pin_zh.md)和补丁 0015 后，
+本轮主线为 **GDM greeter 的 EGL 初始化与 BO pin 生命周期**。
+**2026-11-26 更新：greeter EGL 根因已定位并修复**——GDM greeter
+的 PAM 环境文件注入了面向 SoC 显示栈的兼容库，与 AMD dGPU 的
+EGL/GBM 冲突；注释该 `pam_env` 行后 greeter 以 Wayland 启动，
+`No EGL display` 和 greeter 的 `pin failed` 消失。Wayland 和分辨率
+切换已有实测通过；下面保留 BO 生命周期和 IRQ 生命周期的收尾项。
+
+**1. 抓 greeter 最早的 EGL 失败（已完成）**
+
+根因不是权限、Mesa 或启动时序，而是 GDM greeter 的 PAM 环境文件
+向 greeter 注入了面向 SoC 显示栈的兼容库；该兼容库与 AMD dGPU
+的 EGL/GBM 冲突。普通用户会话不加载该注入，因此 EGL 正常。
+
+去除该注入后，greeter 的 `gnome-shell` 输出
+`Obtained a high priority EGL context`、`Using Wayland display
+name 'wayland-0'`，并注册 GDM；`No EGL display` 和 greeter 的
+`pin failed` 消失。完整分析见 [scanout_bo_pin_zh.md](scanout_bo_pin_zh.md)。
+
+**2. scanout pin 失败（greeter 路径已关闭）**
+
+greeter EGL 修复后不再回退 shadow buffer，因此不需要再为 greeter
+补 BO 直接关联。用户会话启动时的非致命 `pin failed` 归入下一节。
+
+不采用“取消连续标志要求／接受该组合”的方案。清掉检查不能让显存
+真正连续；需要在首次 pin 前满足显示要求，或使用独立、满足连续性
+要求的 scanout 缓冲。画面短时正常也不能代替分配条件的正确性。
+
+**3. 独立修两个 pin 生命周期告警**
+
+unpin 时计数为零、释放时仍带 pin，是两个需要追踪的失配点，不能
+假设互相抵消。沿新旧 FB 交接、失败回滚和会话退出记录配对关系。
+增加 `pin_count` 判断最多是临时防护，不能作为根因修复。
+
+同时核对当前镜像是否仍含旧的 `-EBUSY → VM_FAULT_NOPAGE` 分支。
+`SWcursor` 已绕过触发条件，但不代表 fault 返回语义已修好；第 8.9
+节“第 1 项已完成”的执行更新仅能确认软件光标绕行已验证。
+
+**4. 保持 0015 为可用基线，补验 IRQ 生命周期**
+
+模式切换已有往返及压力测试通过。补丁直接强制使能中断，后续应
+覆盖关闭输出、DPMS、VT 切换和退出 compositor，确认中断能正常
+关闭。补丁说明中的“引用计数为零”与代码注释中的“计数未变化所以
+未重写”，应核对实际调用和寄存器证据后统一表述。
+
+**下一轮任务与验收**
+
+greeter EGL 已修复；下一轮做完整往返验收：
+
+```text
+greeter 硬件加速启动 → 登录 Wayland → 退出回 greeter
+```
+
+同时继续收尾非致命 pin/unpin 警告和 IRQ 生命周期。Xwayland 功能
+验证随后进行；扩大窗口、完整 staging 和 Weston 半刷新率优化暂排
+在上述工作之后。
 
 ## 9. 后续方案：小窗口下的显存访问与 GTT 中转
 
 本节为后续优化设计与验证计划。**当前桌面已经可用**（用户态 BO 走
 GTT，scanout/fbdev 留在 VRAM），因此本节不是阻塞项；只有需要在
 CPU 侧直接读写 VRAM，或做完整的 GTT staging/scanout 中转时才需要
-继续。第 3.1 节保留原始计划，当前修复顺序以第 8.9 节为准。
+继续。第 3.1 节保留原始计划，当前修复顺序以第 8.11 节为准。
 
 ### 9.1 56 MiB 限制的是 CPU 可见范围
 
@@ -869,7 +949,7 @@ fence 和显示更新，避免 CPU 改写 GPU 正在读取的 staging 或显示
 
 ### 9.4 后续调查项（非当前阻塞）
 
-当前执行顺序见第 8.9 节。补丁 0011–0014 已整理并验证可顺序应用，
+当前执行顺序见第 8.11 节。补丁 0011–0014 已整理并验证可顺序应用，
 旧版“本地仅有两份源码、先复现整机失联”的计划已被后续记录取代。
 
 - **TLB 与 DMA 完成语义：** PASID flush 回调已补；response 完成
@@ -887,14 +967,17 @@ fence 和显示更新，避免 CPU 改写 GPU 正在读取的 staging 或显示
 
 ## 10. TODO
 
-- **Xwayland 使用**：在 GNOME Wayland 下运行 X11 应用（xterm、
-  glxgears、浏览器等），确认 Xwayland 走 radeonsi/DRI3、输入、
-  窗口缩放和 vsync 正常；记录 Xwayland 与原生 Wayland 的差异。
-- **GDM greeter / scanout pin**：优先修复 greeter `gnome-shell` 的
-  EGL/shadow-buffer 路径；或在 kernel 里兼容“已 pin 但非连续”的
-  scanout BO，并验证显示无错位。临时可用自动登录或 X11 greeter。
-  详见 [scanout_bo_pin_zh.md](scanout_bo_pin_zh.md)。
-- **pin/unpin 警告**：为 `dce_v6_0_crtc_do_set_base()` 的旧 FB
-  unpin 加保护；继续定位 `ttm_bo_release` 的 pin 泄漏。
-- **DPM 空闲档位**：确认桌面空闲时长期 825/1000 是否由 WebKit/
-  合成器后台活动导致，必要时调整 DPM 策略或验证电池模式。
+按第 8.11 节的顺序推进：
+
+- **GDM greeter EGL（已修复）**：根因是 greeter 的 PAM 环境注入
+  面向 SoC 显示栈的兼容库；去除后 greeter 以 Wayland 启动。详见
+  [scanout_bo_pin_zh.md](scanout_bo_pin_zh.md)。
+- **BO 生命周期**：用户会话启动时的非致命 `pin failed` 和
+  `ttm_bo_unpin`/`ttm_bo_release` 告警仍待清理；分别修复 unpin
+  计数为零和释放时仍带 pin 的失配，并核实 pinned fault 返回语义。
+- **IRQ 生命周期**：保留 0015 基线，验证输出关闭、DPMS、VT 切换
+  和 compositor 退出，统一补丁的原因说明。
+- **Xwayland 使用**：随后在 GNOME Wayland 下运行 X11 应用，验证
+  radeonsi/DRI3、输入、窗口缩放和 vsync，记录与原生 Wayland 的差异。
+- **后续优化**：DPM 空闲档位、Weston 半刷新率、扩大窗口和完整
+  staging 均后排；先保证 greeter 登录/退出完整往返及 BO 生命周期。

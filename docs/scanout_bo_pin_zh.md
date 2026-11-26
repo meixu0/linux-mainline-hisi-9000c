@@ -1,4 +1,4 @@
-# GDM greeter scanout BO pin 失败：复现、采样与根因
+# GDM greeter scanout BO pin 失败：复现、根因与修复
 
 - 日期：2026-11-26
 - 平台：Kirin 9000C（`charlotte`）+ Oland `[1002:6611]`（PCIe1）
@@ -7,32 +7,47 @@
 
 ## 结论
 
-greeter 的 4K scanout BO 在 legacy DCE set_base 路径中 pin 失败，
-直接原因**不是 56 MiB 可见 VRAM 窗口耗尽**，而是“BO 已经 pin 在
-VRAM、但底层 resource 不是连续分配”。按日志和采样推断的链路：
+greeter 的 4K scanout BO pin 失败是**下游症状**，不是内核 pin
+逻辑的独立 bug。完整链路：
 
-1. greeter 的 `gnome-shell` 先因 EGL 初始化失败（`No EGL display`）
-   回退到 shadow buffer；
-2. 该 shadow BO 已经处于 pin 状态（`pin_count = 1`），但不是连续
-   分配；从 `No EGL display` / `prefers shadow buffer` 日志看，
-   它来自 Mutter 的 shadow buffer 路径；
-3. legacy `dce_v6_0_crtc_do_set_base()` 设置
-   `AMDGPU_GEM_CREATE_VRAM_CONTIGUOUS` 后调用
-   `amdgpu_bo_pin(AMDGPU_GEM_DOMAIN_VRAM)`；
-4. `amdgpu_bo_pin()` 的“已 pin”分支发现 BO 带
-   `VRAM_CONTIGUOUS` 标志，但 TTM resource 没有
-   `TTM_PL_FLAG_CONTIGUOUS`，返回 `-EINVAL`；
-5. 日志打印 `amdgpu ... pin failed`，greeter 无法设置 scanout，
-   随后退出。
+1. GDM greeter 的 PAM 环境文件向 greeter 注入了面向 SoC 显示栈的
+   兼容库；该兼容库与 AMD dGPU 的 EGL/GBM 冲突。
+2. greeter 的 `gnome-shell` 因此 EGL 初始化失败（`No EGL display`），
+   回退到 shadow buffer。
+3. shadow BO 已经处于 pin 状态（`pin_count = 1`），但不是连续分配。
+4. legacy `dce_v6_0_crtc_do_set_base()` 要求连续 VRAM，调用
+   `amdgpu_bo_pin()`；已 pin 分支发现 `VRAM_CONTIGUOUS` 标志与
+   resource 不匹配，返回 `-EINVAL`。
+5. 日志打印 `amdgpu ... pin failed`，greeter 无法设置 scanout。
 
-同一内核下普通用户的 Wayland 会话正常：用户会话的 scanout BO 是
-连续 pin 的 `NO_CPU_ACCESS` BO，不走 shadow buffer 路径。
+**修复（2026-11-26）**：注释 GDM greeter 的 `pam_env` 行，不再向
+greeter 注入该 SoC 显示兼容库。greeter 的 `gnome-shell` 恢复：
 
-GDM 的崩溃循环是另一个配置问题：所有 X11 session 文件被隐藏后，
-greeter 失败时没有 X11 回退，`gdm3` 以 SIGTRAP 退出并触发 systemd
-重启循环。它不是 pin 失败的根因，但会放大故障表现。
+```text
+Obtained a high priority EGL context
+Using Wayland display name 'wayland-0'
+Registering session with GDM
+```
+
+`No EGL display`、`gdm3` SIGTRAP 循环和 greeter 的 `pin failed`
+消失。用户会话不受影响，4K Wayland 正常。**因此不需要修改 kernel
+的 pin 逻辑。**
+
+非致命的 `pin failed` 仍可能在用户会话启动时出现（旧 FB 的
+pin/unpin 计数问题），但不阻塞显示，属于单独的清理项。
+
+## 修复结果（2026-11-26）
+
+- 自动化验证：注释 GDM greeter 的 `pam_env` 行，关闭自动登录
+  并重启 GDM；greeter 的 `gnome-shell` 输出
+  `Obtained a high priority EGL context`、`Using Wayland display
+  name 'wayland-0'`，并 `Registering session with GDM`。
+- 恢复自动登录后用户会话仍为 Wayland；4K 下
+  `es2gears_wayland` 约 27.7 FPS，DPMS On。
 
 ## 复现步骤
+
+以下为修复前的诊断记录。
 
 1. 保留 Wayland 的 `gnome.desktop`，临时关闭 GDM 自动登录；
 2. 重启 `gdm.service`；
@@ -136,54 +151,48 @@ if (bo->tbo.pin_count) {
 
 ## 为什么用户会话正常
 
-- 普通用户的 Mutter/GBM 路径分配 scanout BO 时使用
-  `NO_CPU_ACCESS`，按同一代码路径能通过 `amdgpu_bo_pin()` 的检查，
-  说明它的 resource 在 pin 时带连续标志（或还没有被预先 pin）。
-- greeter 在 EGL 失败后选择 shadow buffer，该 BO 的分配/pin
-  路径不同：先被预先 pin，且不是连续分配。legacy set_base 再
-  要求连续 VRAM 时，已 pin 的 BO 无法在不移动/不破坏现有 pin
-  的情况下重新满足条件。
+- 普通用户的 Mutter/GBM 路径不加载该 SoC 显示兼容库，直接使用
+  AMD dGPU 的 EGL/GBM；scanout BO 使用 `NO_CPU_ACCESS`，按同一
+  代码路径能通过 `amdgpu_bo_pin()` 的检查。
+- greeter 在移除该注入前走 shadow buffer 路径，BO 已被预先 pin
+  且非连续；legacy set_base 再要求连续 VRAM 时失败。
 
 ## 影响与规避
 
-- **自动登录**：greeter 不参与，Wayland 用户会话正常，当前即用此
-  方式运行。
-- **X11 greeter 回退（建议，未在本轮验证）**：恢复一个 X11 session
-  文件，让 greeter 失败时有 X11 回退；预期可避免 `gdm3` 的 SIGTRAP
-  重启循环。
-- **不要**把“已 pin 但非连续”的 BO 直接交给显示控制器；显示扫描
-  非连续 VRAM 可能错位或撕裂。任何 kernel 侧兼容都必须实际验证
-  画面。
+- **已修复**：GDM greeter 使用干净的 EGL/GBM 环境，Wayland greeter
+  正常；自动登录不再是规避手段。
+- 如果其他板或镜像也向 greeter 注入了面向 SoC 显示栈的兼容库，
+  应只在 SoC 显示会话启用，不要加载到 AMD dGPU 的 greeter。
+- 非致命的 `ttm_bo_unpin`/`ttm_bo_release` WARNING 仍属独立问题；
+  不要把“已 pin 但非连续”的 BO 直接交给显示控制器。
 - 该问题与补丁 0015 的 vblank/IRQ 修复无关；4K↔1080p 切换仍正常。
 
-## 后续选项
+## 后续
 
-1. **查 EGL 根因（优先）**：同一 dGPU 上用户会话 EGL 正常、greeter
-   的 `gnome-shell` 失败。对比 greeter 用户与普通用户的
-   `eglinfo`、`XDG_RUNTIME_DIR`、DRM ACL、Mesa 环境和启动时序，
-   确认是启动竞态、权限还是 Mesa 上下文问题。
-2. **修 shadow buffer 路径**：如果 greeter 必须使用 shadow buffer，
-   需要在分配时就按连续 VRAM pin，或在 Mutter/GBM 层避免把
-   已 pin 的非连续 BO 交给 legacy set_base。
-3. **kernel 兼容（不优先）**：在 `dce_v6_0_crtc_do_set_base()` 中
-   对已 pin 的 BO 不再强行加 `VRAM_CONTIGUOUS`，或让
-   `amdgpu_bo_pin()` 接受该组合。必须验证显示无错位/撕裂。
-4. **补充确认**：如需把 `pin failed` 的 BO 指针直接对应到 GEM
-   handle，可在 `amdgpu_bo_pin()` 的失败分支临时打印 `mem_type`、
-   `mem_flags`、`flags` 和 `pin_count`；这会增加一次内核重建。
+1. **EGL 根因（已完成）**：已定位为 greeter 的板级 PAM 环境注入；
+   去除后 greeter 恢复 Wayland/EGL。其他镜像应避免把 SoC 显示
+   兼容库注入到 dGPU greeter。
+2. **shadow buffer（不再需要）**：greeter 不再回退 shadow buffer；
+   本节的 pin 分析保留为诊断证据。
+3. **kernel 兼容（不需要）**：不需要修改 `dce_v6_0` 或
+   `amdgpu_bo_pin()` 来接受非连续 scanout BO。
+4. **非致命 pin/unpin 警告（待处理）**：单独清理
+   `ttm_bo_unpin`/`ttm_bo_release` 和用户会话启动时的 `pin failed`。
+5. **Xwayland 使用**：仍在主文档 TODO 中，后续验证 X11 应用。
 
 ## 证据边界
 
 - 采样来自一次 6.18 测试启动；`pin failed` 打印的是内核 BO 指针，
-  没有直接解析成 GEM handle。结论依据是同一时刻的 BO 大小、
-  `pin count`、`VRAM_CONTIGUOUS` 标志、可见窗口用量，以及
-  `amdgpu_bo_pin()` 中唯一匹配的 `-EINVAL` 分支。因此
-  “shadow buffer 预先 pin”是从日志和 `pin_count` 推断，不是直接
-  抓到的调用栈。
-- greeter 从未成功进入 scanout，因此“非连续 BO 直接扫描”的实际
-  画面行为尚未测试。
-- 采样期间 `[fbcon]` 的 4K framebuffer 仍然存在；它在其他场景下
-  仍可能占用可见窗口，是独立的容量问题。
+  没有直接解析成 GEM handle。pin 失败的结论依据是同一时刻的 BO
+  大小、`pin count`、`VRAM_CONTIGUOUS` 标志、可见窗口用量，以及
+  `amdgpu_bo_pin()` 中唯一匹配的 `-EINVAL` 分支。
+- PAM 环境修复已由 greeter 的成功日志（EGL context、Wayland
+  display、Registering session）验证；私有环境文件的具体内容不
+  进入公开文档。
+- greeter 从未成功进入 shadow buffer scanout，因此“非连续 BO 直接
+  扫描”的实际画面行为没有测试；修复后也不再需要测试。
+- `[fbcon]` 的 4K framebuffer 仍存在；它在其他场景下仍可能占用
+  可见窗口，是独立的容量问题。
 
 ## 参考
 

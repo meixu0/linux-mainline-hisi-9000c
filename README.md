@@ -64,13 +64,14 @@ Kirin 9000C UFS/PCIe/clock blocks are different.
 
 ### Known issues / current work
 
-- GNOME Wayland works when only the Wayland session is available; GDM's
-  greeter fails EGL (`No EGL display`) and, with all X11 session files
-  hidden, `gdm3` aborts with `no session desktop files installed` and
-  enters a restart loop. The greeter's 4K BO is already pinned but lacks
-  `TTM_PL_FLAG_CONTIGUOUS`, so `amdgpu_bo_pin()` returns `-EINVAL`
-  (`amdgpu ... pin failed`); the Wayland user session is unaffected
-  while autologin is enabled.
+- GDM greeter works after disabling the board-specific SoC display
+  compatibility library injection for the greeter. That injection comes
+  from a PAM environment file and conflicts with the AMD dGPU's
+  EGL/GBM; with it disabled the greeter obtains a high-priority EGL
+  context and starts Wayland. The user session is unaffected. The
+  earlier scanout BO `pin failed` was a shadow-buffer symptom of the
+  EGL failure; no kernel pin change is needed. Details:
+  [中文](docs/scanout_bo_pin_zh.md).
 - 4K↔1080p mode switching is fixed by patch 0015 (restore the DCE
   vblank/pageflip IRQ masks after a modeset). Verified under GNOME
   Wayland (six switches under load) and X11. A `ttm_bo_unpin` warning
