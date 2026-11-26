@@ -1,11 +1,15 @@
 # amdgpu 迁移与 Oland 显示打通记录（2026-11-26）
 
-> 当前状态（2026-11-26 第 3 轮）：amdgpu 已完成初始化，GART 正常，
-> DRM/fb0 工作，DVI-I-1 已 `enabled`。**用户态 X11 GNOME 桌面可用**：
-> amdgpu DDX + glamor/radeonsi + DRI3，`glxinfo` 报告
-> `direct rendering: Yes`、GL 4.6 / GLES 3.2。用户态 VRAM→GTT 策略
-> （补丁 0012）消除了 EL0 SError；第 2 轮出现的约 555 秒 Xorg 停顿
-> 在第 3 轮未复现（`dri2`→`glamoregl` 仅 0.263 秒），保留为观察项。
+> 当前状态（2026-11-26）：amdgpu 已完成初始化，GART 正常，DRM/fb0
+> 工作，DVI-I-1 已 enabled。X11 GNOME 桌面可用（amdgpu DDX +
+> glamor/radeonsi + DRI3，GL 4.6 / GLES 3.2）；Weston Wayland 也已
+> 跑通（radeonsi，GLES 3.2）。用户态 VRAM→GTT 策略（补丁 0012）
+> 消除了 EL0 SError；第 2 轮的 555 秒停顿未复现。
+>
+> 当前阻塞：GNOME Wayland 因 6.18 缺少 CONFIG_TMPFS_POSIX_ACL /
+> CONFIG_TMPFS_XATTR、logind 无法应用 DRM ACL 而回退 X11（正在重建）；
+> X11 切换分辨率仍会卡死（ttm_bo_unpin 不平衡）；LightDM greeter 的
+> scanout BO 仍有 VRAM↔GTT 往返。详见 8.8–8.10。
 >
 > 本文第 8 节给出复核结论、实测记录和证据边界；radeon 仍是已验证的
 > 可用回退。
@@ -30,10 +34,15 @@
 | fb0 | `amdgpudrmfb`，1680x1050，32bpp |
 | DVI-I-1 | `connected`、`enabled`、`dpms=On`、模式 1680x1050 |
 | 屏幕输出 | **已点亮**，可显示 initramfs/内核控制台 |
-| 用户态 Xorg | **通过**：amdgpu DDX + glamor/radeonsi + DRI3，X11 GNOME 桌面可用 |
-| 硬件渲染 | **通过**：`glxinfo` 报告 `direct rendering: Yes`、`radeonsi/oland`、GL 4.6、GLES 3.2 |
+| X11 桌面 | **通过**：amdgpu DDX + glamor/radeonsi + DRI3，GNOME X11 桌面可用 |
+| Weston Wayland | **通过**：DRM 输出 + radeonsi/GLES 3.2，鼠标键盘和终端正常 |
+| GNOME Wayland | **阻塞**：GDM 回退 X11；根因是 6.18 缺 `CONFIG_TMPFS_POSIX_ACL`/`XATTR`，正在重建 |
+| 硬件渲染 | **通过**：`glxinfo`/`eglinfo` 报告 `direct rendering: Yes`、`radeonsi/oland`、GL 4.6、GLES 3.2 |
+| vsync 性能 | 1080p@60 约 33 FPS，4K@30 约 17 FPS；关 vsync 1080p 148 FPS、4K 115 FPS |
 | 555 秒停顿 | 第 2 轮出现一次（554.9 秒）；第 3 轮未复现（`dri2`→`glamoregl` 仅 0.263 秒） |
-| 整机稳定性 | 第 3 轮连续运行 GNOME 桌面，无 SError、无 panic、无 GPU 等待阻塞 |
+| X11 分辨率切换 | **会卡死**；`dce_v6_0_crtc_do_set_base` 路径出现 `ttm_bo_unpin` 不平衡告警，未修复 |
+| LightDM greeter | `SWcursor` 已消除 pinned 光标 BO 循环；scanout BO 仍有 VRAM↔GTT 往返 |
+| 整机稳定性 | GNOME X11 / Weston 连续运行，无 SError、无 panic、无 GPU reset |
 
 ## 1. 关键修复
 
@@ -232,14 +241,13 @@ pci 0000:01:00.0: BAR 4 [io  size 0x0100]: failed to assign
 `0xea100000`；amdgpu 能读取 VBIOS、初始化 GART、跑 ring 并注册 fb0。
 radeon 在相同 BAR 失败下可正常显示，因此这些失败不是黑屏原因。
 
-## 3. 当前剩余问题：Xorg 启动时的 SError（原因未确认）
+## 3. 历史问题：Xorg 启动时的 SError（已由 GTT 策略解决）
 
 > **状态（2026-11-26 第 3 轮）：已解决。** 用户态 VRAM→GTT 策略
 > （补丁 0012）让 Xorg 不再直接映射 VRAM，EL0 SError 不再出现，
 > X11 GNOME 桌面已正常工作。本节保留为历史分析。
 
-LightDM 已安装并启用，autologin 已配置。2026-11-26 之前的一次 6.18
-rootfs 启动记录到：
+2026-11-26 之前的一次 6.18 启动记录到：
 
 - `lightdm` 为 `active`；
 - Xorg 启动后出现 EL0 SError：
@@ -307,24 +315,16 @@ ShadowFB。
 不再尝试用捕获 SError 后重试拆分指令的方式修复；异步异常无法可靠
 定位故障指令，也不能保证事务未部分完成。
 
-## 4. 复现与测试方法
+## 4. 构建与配置要点
 
-1. 配置：`CONFIG_DRM_AMDGPU=y`、`CONFIG_DRM_AMDGPU_SI=y`、
-   `CONFIG_DRM_RADEON=n`；
-2. 内嵌固件：`amdgpu/oland_{ce,k_smc,mc,me,pfp,rlc,smc,uvd}.bin`
-   （`CONFIG_EXTRA_FIRMWARE`，否则内建驱动在挂载 rootfs 前拿不到固件）；
-3. 应用第 1、2 节和第 8.4 节的修改；
-4. 内核命令行加 `amdgpu.rebar=0`，避免它修改已重定位的 BAR0；
-5. 构建后按 [`pcie1_ffa_bar_zh.md`](pcie1_ffa_bar_zh.md) 的方式启动。
-
-每轮确认修改文件确实重新编译，并记录安装镜像的 hash。保留 5.10 和
-默认启动项，通过 `grub-reboot` 单次启动测试；串口只允许一个读取进程，
-交互与日志保存共用该进程。
-
-测试注意：rootfs 里的串口 shell 在关闭串口后可能不再出现 `login:`，
-普通用户 `dmesg` 也可能只显示命令行；需要 `sudo dmesg`。如果 Xorg
-再次触发异步 SError，内核可能直接 panic（`panic=20` 会重启），板子
-可能失联，需预留手动断电恢复。
+- 配置：`CONFIG_DRM_AMDGPU=y`、`CONFIG_DRM_AMDGPU_SI=y`、
+  `CONFIG_DRM_RADEON=n`；
+- 内嵌固件：`amdgpu/oland_{ce,k_smc,mc,me,pfp,rlc,smc,uvd}.bin`
+  （`CONFIG_EXTRA_FIRMWARE`；内建驱动在挂载 rootfs 前 probe，不能依赖
+  `/lib/firmware`）；
+- 应用第 1、2 节和第 8.4 节的修改；
+- 内核命令行加 `amdgpu.rebar=0`，避免它修改已重定位的 BAR0；
+- 每轮确认修改文件确实重新编译，并保留可回退的基线镜像。
 
 ## 5. 与上游补丁集的关系
 
@@ -333,20 +333,15 @@ ShadowFB。
 同步对齐异常处理不能直接用于异步 SError 恢复；本轮的宽访问观察
 来自本板特定调用点，不能据此断言参考补丁集的适用范围。
 
-## 6. 桌面与输入配置现状
+## 6. 桌面与输入验证
 
-- 显示管理器：LightDM + `lightdm-gtk-greeter`，已禁用厂商默认管理器；
-- 自动登录：`autologin-user=<用户名>`，`autologin-session` 指向目标会话；
-- 串口：已启用 `serial-getty@ttyHW0`，可在无键盘时登录；
-- 输入：`CONFIG_INPUT_EVDEV=y`，USB 鼠标/复合键盘生成
-  `/dev/input/event*`，Xorg 能识别；
-- 键盘硬件本身当前不稳定，串口是可靠的调试通道；
-- 曾发现 AccountsService 的 `Session`/`XSession` 指向厂商预置的
-  Wayland 会话，覆盖了 LightDM 的 `user-session` 配置；已改为目标会话。
-  这是“配置成 Xorg 却启动了厂商会话”的直接原因。
-- rootfs 启动较慢，部分 unit 会等待；测试时临时 mask 过
-  NetworkManager、winbind、random-seed。这不是根因修复，且屏蔽
-  NetworkManager 后不能依赖 SSH 诊断。
+- X11 GNOME 和 Weston Wayland 均可用；X11 使用 amdgpu DDX +
+  glamor/radeonsi + DRI3，Weston 使用 DRM + radeonsi。
+- `CONFIG_INPUT_EVDEV=y`；USB 鼠标/复合键盘生成 `/dev/input/event*`，
+  Xorg 和 Weston 都能识别。
+- 显示管理器和会话选择属于部署配置，不在此记录；关键结论是：
+  硬件光标/scanout BO 的 CPU 映射会影响 greeter，软件光标可绕开
+  pinned 光标 BO 的缺页循环。
 
 ## 7. 涉及文件
 
@@ -405,7 +400,7 @@ visible 检查、映射属性和显示路径上的差异更值得先查。
 
 ### 8.3 执行状态
 
-- [x] 第 1 项：visible 检查与 fault 日志（镜像 `f2c105ed…`；已测，单独不够）
+- [x] 第 1 项：visible 检查与 fault 日志（已测，单独不够）
 - [ ] 第 2 项：受控宽度测试（桌面已通过 GTT 策略可用，宽度限制未确认为
   根因；保留为硬件特性调查，不是当前阻塞项）
 - [x] 第 3 项：Xorg 映射/PC/AER 定位（Xorg 日志和线程栈已拿到；
@@ -422,8 +417,7 @@ visible 检查、映射属性和显示路径上的差异更值得先查。
 
 **第 1 项（visible 检查）结果：不够。**
 
-镜像 `f2c105ed294e0dec2f1312e09b8760ce593f3b575fda6666080e10b285fe5a86`
-启动 rootfs 后，Xorg 先命中一个非 visible VRAM BO：
+第 1 轮测试中，Xorg 先命中一个非 visible VRAM BO：
 
 ```
 CPU fault (Xorg): VRAM bo start=0x3ee00000 size=0x200000 visible=0x3800000 pinned=0
@@ -447,8 +441,7 @@ Kernel panic - not syncing: Asynchronous SError Interrupt
 
 **用户态 GTT 策略（第 4 项前半）结果：SError 消失，但出现 555 秒停顿。**
 
-镜像 `bad656298a2b07cc27e229acc53d828bd108af8a2f5c478342f7adf00c47ce78`
-加入了：
+第 2 轮加入了：
 
 - `amdgpu_gem_object_mmap()`：VRAM BO 在用户态 `mmap` 时迁移到 GTT；
   pinned VRAM BO 返回 `-EPERM`；
@@ -456,7 +449,7 @@ Kernel panic - not syncing: Asynchronous SError Interrupt
   `SIGBUS`/`NOPAGE`；
 - 内核 fbdev 的 `ttm_bo_kmap()` 路径不变，仍走 8 字节 I/O。
 
-启动 rootfs 后观察到：
+启动后观察到：
 
 ```
 lightdm: active
@@ -494,71 +487,20 @@ amdgpu DDX 的 `PreInit` 阶段（dri2 之后、glamor 之前），可能对应
 内核里的 GPU 等待、DDX 的 BIOS/DRM 查询或显示资源探测；现有 Xorg
 日志无法区分。
 
-板子当时无法 SSH，是因为测试命令行带了
-`systemd.mask=NetworkManager.service`；串口 shell 也没有响应，所以
-“板子失联”不能直接当作内核永久挂死的证据。该轮内核 dmesg 没有
-持久化，无法确认停顿期间内核在做什么。
+该轮内核 dmesg 没有持久化，无法确认停顿期间内核在做什么。
 
-本轮还确认：普通用户 `dmesg` 在 rootfs 里只显示命令行，不能作为
-内核日志缺失的证据；后续必须用 `sudo dmesg` 或完整 journal。
+### 8.5 诊断环境与工具踩坑
 
-### 8.5 诊断环境修正与当前板子状态
-
-- 已修正 `/etc/systemd/journald.conf`：原来 `Storage=persistent`
-  写在 `[Journal]` 段外，journald 实际按 `auto` 运行，导致 6.18
-  启动日志没有持久化。现已移入 `[Journal]` 并创建
-  `/var/log/journal`，`journalctl --disk-usage` 已能看到归档日志。
-- 新增一次性 GRUB 项
-  `Linux 6.18 charlotte rootfs diag (TEST - uart console)`：
-  保留 NetworkManager，便于 SSH；仍 mask `winbind` 和
-  `systemd-random-seed`，避免已知启动延迟。默认启动项未改。
-- 实际启动该 diag 项后发现 **NetworkManager 本身会卡住启动**：
-  `r8152` 已加载并把接口重命名为 `enx<MAC>`，但
-  `NetworkManager.service/start` 一直处于 running（超时上限
-  `10min 34s`），`graphical.target` 没有完成，Xorg 没有启动，SSH
-  也不可达。该轮已手动重启回 5.10，因此这一项不能用来复现 Xorg
-  停顿；后续仍用 mask 掉 NetworkManager 的原 rootfs 测试项，靠
-  串口和落盘日志取结果。
-- 板子已手动重启回 5.10；GRUB 默认项仍是 5.10。
-- 第 2 轮安装镜像：
-  `bad656298a2b07cc27e229acc53d828bd108af8a2f5c478342f7adf00c47ce78`。
-- 第 1 轮镜像备份：
-  `/boot/linux-6.18-charlotte/Image.pre-gttmmap-034942`。
-- 第 2 轮修改前的 `amdgpu_gem.c` 备份：
-  `amdgpu_gem.c.pre-gttmmap-034839`。
-- GRUB 备份：`/boot/grub/grub.cfg.pre-diag-115344`；
-  journald 备份：`/etc/systemd/journald.conf.pre-diag-115344`。
-- 所有改动仍未提交。
-
-### 8.6 自动诊断服务：抓 555 秒停顿
-
-为避开“停顿期间串口/网络不可用”的问题，在 rootfs 中新增并启用
-`amdgpu-diag.service`（`ConditionKernelVersion=6.18*`，5.10 启动时
-直接退出）。它排在 `lightdm.service` 之后，等 Xorg 出现后每 15 秒
-记录一次，持续约 12 分钟：
-
-- `ps` 的 `stat`/`wchan`，`/proc/<Xorg>/stack`；
-- Xorg 每个线程的 `wchan` 和内核栈；
-- `dmesg` 尾部、DVI-I-1 的 `status`/`enabled`/`dpms`；
-- `/sys/kernel/debug/dri/0/` 下可读的 amdgpu debugfs；
-- 第 4、8 个采样点执行一次
-  `gdb -batch -ex 'thread apply all bt' -p <Xorg>`；
-- 结束后保存完整 `dmesg`、`journalctl -k -b` 和
-  `/var/log/Xorg.0.log`，把诊断日志直接写到 `/dev/ttyHW0`，
-  `sync` 后 `systemctl reboot`，让一次性测试项消耗完并回到默认
-  5.10。
-
-这样即使 NetworkManager 被 mask、串口 getty 在停顿期间不响应，
-也能在停顿结束后从串口拿到日志，并自动回到 5.10 读盘上的完整
-记录。下一步用原 rootfs 测试项复现停顿，再根据内核栈/线程栈决定
-是修 GPU 等待、DDX 查询还是显示资源探测。
+- **journald 持久化**：`Storage=persistent` 必须写在 `[Journal]` 段内，
+  否则 journald 按 `auto` 运行，6.18 日志不会落盘。
+- **`amdgpu_vram` 不是摘要**：`/sys/kernel/debug/dri/0/amdgpu_vram` 是
+  1 GiB 的显存原始转储。诊断脚本按文本读取它，30 分钟就把日志写到
+  4.7 GB，单个采样点耗时数分钟。读取 debugfs 前必须确认文件大小，
+  大文件只取头部或跳过。
 
 ### 8.7 2026-11-26 第 3 轮实测：X11 GNOME 桌面可用，555 秒停顿未复现
 
-本轮仍使用 mask 掉 NetworkManager 的 rootfs 一次性测试项，内核
-`6.18.0-00007-g57305409a010-dirty`，镜像 SHA256
-`bad656298a2b07cc27e229acc53d828bd108af8a2f5c478342f7adf00c47ce78`
-（与第 2 轮相同）。
+本轮 6.18 实测内核：`6.18.0-00007-g57305409a010-dirty`（第 3 轮）。
 
 **Xorg 本轮没有出现 555 秒停顿。** 同一位置的日志为：
 
@@ -608,16 +550,8 @@ Max GLES[23] profile version: 3.2
 - `/var/log/amdgpu-diag.log` 在 30 分钟内涨到 **4.7 GB**；
 - 每个采样点耗时约 7 分钟，48 个点无法在合理时间内完成。
 
-已修正脚本：只读 `amdgpu_fence_info` 并用 `head -c 8192` 限长；
-`gdb` 加 `timeout 90`；即使等不到 Xorg 也会 dump 到串口并重启。
-4.7 GB 日志已清零，`amdgpu-diag.service` 已 `disable`（unit 保留，
-需要时可手动启动）。本轮未改动 GRUB 默认项。
-
-**网络访问：** mask 掉 NetworkManager 的测试项启动后网口是 down 的，
-但 `sshd` 正常监听。手动执行
-`ip addr add <开发机同网段地址>/24 dev <USB 网卡接口>` 和
-`ip link set <USB 网卡接口> up` 后即可从开发机 SSH/SCP，后续诊断
-不必再依赖 115200 串口搬日志。
+读取 debugfs 前必须确认文件大小；大文件只取头部或跳过，不要整份读入
+诊断日志。
 
 **对 555 秒停顿的当前判断：** 第 3 轮未复现，且采样点里没有 GPU
 等待证据；现有材料不足以把它归因于 amdgpu。它更可能是一次性的
@@ -638,12 +572,186 @@ Max GLES[23] profile version: 3.2
 仅用于定位的逐次 fault 日志、GART 调试读回和 ring dump 没有进入
 补丁。补丁已在 `v6.18 + 0010` 基线上用 `git am` 顺序验证通过。
 
+### 8.8 2026-11-26 Wayland 准备与 X11 卡死定位
+
+**现象 1：LightDM greeter 卡死，键鼠无响应**
+
+串口日志显示 greeter 的 Xorg 反复缺页在一个 **pinned VRAM BO**
+（VRAM 偏移 `0x20c000`，大小 `0x4000`，即 DCE 光标缓冲区）：
+
+```
+mmap/fault: refusing pinned VRAM BO (Xorg): start=0x20c000 size=0x4000
+...
+amdgpu_gem_bo_move_to_gtt_locked: 8203168 callbacks suppressed
+```
+
+本地源码 `amdgpu_gem.c` 和补丁 0012 的实际处理是：
+
+```c
+if (r == -EBUSY || r == -ERESTARTSYS)
+        ret = VM_FAULT_NOPAGE;
+else
+        ret = VM_FAULT_SIGBUS;
+```
+
+pinned VRAM BO 返回 `-EBUSY` 后，这个分支没有建立 PTE，也没有等待
+能解除 pin 的事件，就返回 `NOPAGE`，足以解释同一指令反复缺页和
+数百万次日志被抑制。此前“SIGBUS 后 Xorg 主动重试”的描述不符合
+本地实现；仍需核对板上测试镜像与该代码是否完全一致。
+
+内核仍在运行；USB 键鼠在日志中正常枚举。
+
+**现象 2：X11 切换分辨率卡死**
+
+同一轮日志在 greeter 之前还有一次 Xorg 的 `ttm_bo_unpin` 告警：
+
+```
+WARNING: ... at drivers/gpu/drm/ttm/ttm_bo.c:648 ttm_bo_unpin
+Call trace:
+ ttm_bo_unpin
+ amdgpu_bo_unpin
+ dce_v6_0_crtc_do_set_base
+ dce_v6_0_crtc_set_base
+ drm_crtc_helper_set_config
+ amdgpu_display_crtc_set_config
+ drm_mode_setcrtc
+```
+
+告警说明发生了不配对的 unpin，但尚不能证明由 GTT 迁移造成，也
+不能仅凭该栈确定整个卡死的原因。当前 helper 已拒绝迁移 pinned BO，
+应独立追踪显示路径的引用与 pin 生命周期。**尚未修复。**
+
+### 8.9 代码复核后的修复重点与执行顺序
+
+第 3 轮已证明 radeonsi/glamor 硬件桌面可以工作。当前重点从“让 GPU
+跑起来”转向**补齐 GTT 策略与显示 BO 生命周期的边界**。完整 staging
+降为备用方案；以下均为待实施、待验证的修复计划。
+
+**1. 消除 pinned fault 的无进展循环，再验证软件光标**
+
+- 区分在当前策略下不允许映射的 pinned VRAM 与可重试的暂态错误。
+  前者应明确失败，不能在未建立 PTE、也没有进展条件时返回
+  `VM_FAULT_NOPAGE`；暂态错误按 fault 的锁及重试约定处理。
+- 不采用 dummy page 作为修复。它会让写入看似成功，实际光标内容
+  没有进入 VRAM，掩盖映射接口错误。
+- 给 Xorg amdgpu 配置 `Option "SWcursor" "true"`，让软件光标参与
+  已有绘制/合成路径，避开硬件光标 BO 的 CPU 更新。
+
+明确失败只解决内核侧无进展循环，可能仍导致用户态报错或退出；
+软件光标才是当前让用户态正常工作的绕行方案，两者需分别验证。
+
+**2. 独立定位模式切换的 pin/unpin 配对**
+
+在 `dce_v6_0_crtc_do_set_base()` 及对应 pin/unpin 路径记录：
+
+- 新旧 framebuffer 的 BO 标识，以及两者是否相同；
+- 每次 pin/unpin 前后的计数、内存域和操作返回值；
+- 新 BO pin 失败后，是否仍执行旧 BO 释放；
+- 重复设置同一模式、切换模式、关闭 CRTC 分别执行的分支。
+
+重点查 pin 失败仍清理、重复 unpin、新旧 BO 相同却处理不配对。
+不要简单用 `if (pin_count)` 跳过告警，这会隐藏生命周期错误。
+
+**3. 补齐映射与显示用途之间的生命周期约束**
+
+“mmap/fault 时搬到 GTT”不保证 BO 后续一直可被 CPU 安全访问。
+需要验证是否出现以下过程，而非把它当作已确认事实：
+
+```text
+用户建立映射 → BO 在 GTT
+显示路径将它迁入 VRAM 并 pin
+用户再次访问 → fault 无法迁回 GTT
+```
+
+“只迁移非 pinned BO”已经是当前行为，不构成新增修复。应追踪
+同一个 BO 从创建、映射、迁移到显示使用及释放的全过程，同时核对
+迁移时旧 PTE 的撤销。
+
+`amdgpu_gem_object_mmap()` 当前在 reservation 锁外检查 `resource`
+和 `pin_count`。决定迁移或拒绝的状态检查应统一放到锁内，避免
+检查与使用之间状态改变；仅加锁仍不能替代后续用途变化的约束。
+
+**4. 下一轮验证顺序**
+
+1. 核对板上源码、补丁和镜像，修正 pinned fault 的无进展返回，
+   开启 Xorg 软件光标。
+2. 验证 greeter、登录桌面、退出回 greeter，确认没有缺页风暴。
+3. 定位并修复模式切换的 pin/unpin 配对，覆盖重复设模、切换模式
+   及关闭输出，保留完整日志。
+4. 从独立会话启动 Weston，固定分辨率、优先软件光标，确认 GL
+   renderer 实际使用 Oland。Xorg 的 `SWcursor` 配置不适用于
+   Weston，须按安装版本核对其软件光标设置。
+5. 再测 Wayland 分辨率切换、退出后的控制台恢复及 GNOME Wayland。
+
+Weston 不必依赖 LightDM greeter 启动，避免 Xorg greeter 故障阻挡
+Wayland 验证。优先 GL 路径：当前硬件加速已有成功证据，而 Pixman
+可能再次遇到 CPU 映射输出缓冲的限制。尚无证据表明切换到 Wayland
+本身能修复内核 pin/unpin 错误。
+
+扩大窗口、受控宽访问实验和完整 staging 暂时后排。555 秒停顿保留
+为观察项，仅在再次出现时抓取，不再以“整机失联”作为当前主线。
+
+**执行更新（2026-11-26 晚）：**
+
+- 第 1 项已完成：Xorg `Option "SWcursor" "true"` 已验证，pinned 光标
+  BO 的缺页循环消失；未采用 dummy page。
+- 第 4 项已完成：Weston 独立会话验证通过，GL renderer 为 radeonsi；
+  GNOME Wayland 受 8.10 的 ACL 问题阻塞。
+- 新增：重建 6.18 内核启用 `CONFIG_TMPFS_POSIX_ACL` /
+  `CONFIG_TMPFS_XATTR`，然后验证 GDM Wayland。
+- 第 2、3 项（pin/unpin 配对、映射生命周期）仍待处理。
+
+### 8.10 2026-11-26 Wayland、GDM 与性能实测
+
+**Weston（已通过）**
+
+- 在 6.18 上以 root 启动 Weston 14.0.2，DRM 输出 DVI-I-1，鼠标/键盘
+  正常，`weston-terminal` 可用。
+- `eglinfo -p gbm`：`AMD Radeon R7 200 Series (radeonsi, oland, ...)`，
+  EGL 1.5，GLES 3.2。
+- 1080p@60：vsync `es2gears` 33 FPS / `weston-simple-egl` 33 FPS；
+  `vblank_mode=0` 时 148 FPS / 144 FPS。
+- 4K@30：vsync 17 FPS；`vblank_mode=0` 全屏 115 FPS。
+- 说明 GPU 渲染路径可用；vsync 下只有刷新率的一半，瓶颈在每帧
+  提交（legacy 非 atomic DRM、双缓冲等 vblank），不是 GPU 算力。
+
+**GPU 频率**
+
+- 空闲时 `amdgpu_pm_info` 可能停在 power level 0（30 MHz）；
+  `power_dpm_force_performance_level=high` 可到 825/1000 MHz。
+- 强制 high 后 vsync FPS 不变（仍受呈现路径限制），但 no-vsync
+  吞吐明显提高。DPM auto 的升频策略仍需观察。
+
+**GDM / GNOME Wayland（当前阻塞）**
+
+- GDM 的 Wayland greeter 和自动登录用户会话都回退到 X11，日志：
+  ```
+  Failed creating base context during opening of kernel driver.
+  Failed to initialize accelerated iGPU/dGPU framebuffer sharing: No EGL display
+  Failed to setup: The GPU /dev/dri/card0 chosen as primary is not supported by EGL.
+  ```
+- 同时 logind 报：
+  ```
+  systemd-logind: Failed to apply ACLs: Operation not supported
+  ```
+- 6.18 内核配置缺 `CONFIG_TMPFS_POSIX_ACL` / `CONFIG_TMPFS_XATTR`
+  （5.10 两者都是 y），导致 logind 无法给 `/dev/dri/*` 应用会话 ACL，
+  Mutter 通过 logind 获取 DRM master 失败，Wayland 回退 X11。
+- 手动把 `<user>`/GDM 用户加入 `video,render` 组后，`eglinfo` 能
+  看到 radeonsi，但 GDM 仍回退；因此按内核配置修复，正在重建。
+
+**桌面状态**
+
+- LightDM greeter 加 `Xorg Option "SWcursor"` 后 pinned 光标 BO 循环
+  消失，但 Xorg scanout BO 仍有 VRAM↔GTT 往返；X11 分辨率切换的
+  `ttm_bo_unpin` 告警仍未修复。
+
 ## 9. 后续方案：小窗口下的显存访问与 GTT 中转
 
 本节为后续优化设计与验证计划。**当前桌面已经可用**（用户态 BO 走
 GTT，scanout/fbdev 留在 VRAM），因此本节不是阻塞项；只有需要在
 CPU 侧直接读写 VRAM，或做完整的 GTT staging/scanout 中转时才需要
-继续。第 3.1 节保留原始计划。
+继续。第 3.1 节保留原始计划，当前修复顺序以第 8.9 节为准。
 
 ### 9.1 56 MiB 限制的是 CPU 可见范围
 
@@ -666,7 +774,7 @@ CPU 侧直接读写 VRAM，或做完整的 GTT staging/scanout 中转时才需�
 | 路线 | 做法 | 限制及状态 |
 |---|---|---|
 | 迁入 visible VRAM | CPU 访问前把 BO 搬入前 56 MiB | 空间有限，pinned BO 不一定能搬；且本轮 visible BO 附近仍观察到异常 |
-| **GTT 中转** | CPU 访问系统内存，GPU 在 GTT 与 VRAM 间复制 | 优先推进；需要复制、DMA 一致性及 fence 同步 |
+| **GTT 中转** | CPU 访问系统内存，GPU 在 GTT 与 VRAM 间复制 | 备用方案；需要复制、DMA 一致性及 fence 同步 |
 | 扩大硬件窗口 | 协调 PCIe 地址转换、固件放行、BAR 和驱动可见范围 | 平台能力待调查，不能只调大 `visible_vram_size` |
 | 动态切换窗口 | 让 CPU 窗口轮流覆盖不同显存段 | 硬件支持未确认；必须协调所有存量映射及内核访问，当前不采用 |
 
@@ -690,7 +798,8 @@ fence 和显示更新，避免 CPU 改写 GPU 正在读取的 staging 或显示
 正在扫描的目标缓冲。读回同样须等待 GPU 完成并确保 CPU 可见。
 
 现有 mmap/fault 强制 BO → GTT 的策略没有建立这套独立缓冲与复制
-流程，不能直接视为完整显示方案。尤其需要核对：
+流程，但第 3 轮已验证现有加速桌面可用，无需先实现通用 staging。
+仍需核对其边界：
 
 - BO reservation、迁移完成等待、旧用户 PTE 撤销和 fault 重试；
 - 映射后是否可能再次被迁回 VRAM；
@@ -698,26 +807,20 @@ fence 和显示更新，避免 CPU 改写 GPU 正在读取的 staging 或显示
 - 非一致性 DMA 下 CPU/GPU 数据可见性，不能仅以 GTT 使用 WC
   映射或 ring 已加同步作为整个提交链正确的依据。
 
-### 9.4 下一轮执行顺序
+### 9.4 后续调查项（非当前阻塞）
 
-1. **先对齐源码与镜像。** 本次本地复核时，仓库仅有
-   `amdgpu_drv.c`、`gmc_v6_0.c` 两份 amdgpu 源文件，且后者尚无文档
-   所述的 PASID flush 回调；板上 GTT mmap 等修改未完整收录。
-   先收齐 `bad65629…` 对应源码、diff 和配置，再做修复。
-2. **分阶段复现失联。** 停止 LightDM 自动启动，先验证纯控制台，
-   再手动启动 modesetting 且禁用 glamor 的 Xorg，最后进入桌面。
-   每阶段保存完整串口、内核、Xorg 日志和进程 maps，确认画面与
-   响应状态；不以进程存在作为桌面可用的判据。
-3. **审计 GTT 迁移及显示路径。** 按 9.3 核对生命周期和同步，定位
-   第二轮失联发生在哪一步，再实现完整 staging；每轮只改一个变量。
-4. **核实 TLB 与 DMA 完成语义。** 对 SI invalidate response 确认
-   位含义和完成条件后再加入有界等待与超时日志，不能只因寄存器
-   存在就直接轮询。DMA 同步范围同时检查 ring、IB、页表以及
-   writeback/fence，而不仅是 ring 本身。
-5. **单独做 VRAM 宽度实验。** 用专门分配、固定且完全位于 visible
-   窗口内的测试 BO，分别改变映射属性、读写方向和访问宽度，核对
-   实际机器指令及可获得的 ESR/FAR/PCIe 状态。避免对同一物理页
-   同时建立不同属性的映射，避免触碰在用的 GART/scanout 内容。
+当前执行顺序见第 8.9 节。补丁 0011–0014 已整理并验证可顺序应用，
+旧版“本地仅有两份源码、先复现整机失联”的计划已被后续记录取代。
 
-以上用于收窄原因：GTT 中转是可行方向的设计，并非已验证修复；
-扩大窗口作为独立的平台调查项推进。
+- **TLB 与 DMA 完成语义：** PASID flush 回调已补；response 完成
+  条件和 GTT/ring 屏障仍需单独核实。若增加等待，应先确认寄存器
+  语义，再使用有界等待及超时日志；DMA 同步范围包括 ring、IB、
+  页表和 writeback/fence，而不仅是 ring。
+- **VRAM 宽度实验：** 使用专门分配、固定且完全位于 visible 窗口
+  内的测试 BO，分别改变映射属性、读写方向和访问宽度，核对机器
+  指令及可获得的异常/PCIe 状态。避免对同一物理页同时建立不同
+  属性的映射，也避免触碰在用 GART/scanout。
+- **完整 GTT staging：** 仅在现有加速路径和软件光标无法满足需求、
+  确需 CPU 更新 VRAM 输出内容时，继续设计第 9.3 节的中转路径。
+- **扩大窗口：** 作为独立的平台能力调查，不代替 fault 返回值和
+  BO 生命周期修复。

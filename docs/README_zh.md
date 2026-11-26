@@ -5,8 +5,7 @@
 面向华为麒麟 9000C（代号 `charlotte`，板卡 `QHW-100` / `SP1PANGUXM`）单板计算机的
 Linux 6.18 主线移植：构建脚本、补丁、内核配置、设备树和工具集。
 
-板子通过 UEFI -> GRUB 链式启动。厂商 5.10 内核（`5.10.97-38-9000c`）保持为默认启动项，
-6.18 镜像是手动的一次性测试项（`grub-reboot`）。
+厂商 5.10 内核（`5.10.97-38-9000c`）保持为默认；6.18 是独立的测试镜像。
 
 ## 包含内容
 
@@ -16,12 +15,10 @@ Linux 6.18 主线移植：构建脚本、补丁、内核配置、设备树和工
 - `defconfig/`：6.18 构建使用的本地内核配置
 - `drivers/`：补丁系列新增/修改的驱动源码本地镜像
 - `dts/`：补丁系列使用的板级 DTS/DTSI 本地镜像
-- `docs/`：移植笔记、构建指南和串口日志
+- `docs/`：移植笔记和构建指南
 - `firmware/`：固件说明（6.18 不需要额外的板级固件 blob）
-- `packaging/`：移植期间使用的厂商参考包说明
-- `tools/`：板端辅助工具（MMIO 诊断、initramfs 脚本、chroot 助手）
+- `tools/`：板端辅助工具（MMIO 诊断）
 - `scripts/ci/`：非交互式构建脚本
-- `scripts/local/`：在板子上直接运行的脚本
 
 ### 功能状态
 
@@ -29,13 +26,12 @@ Linux 6.18 主线移植：构建脚本、补丁、内核配置、设备树和工
 | -------------------------- | --------- | --------------------------------------------------------------------------------------------------------------------------- |
 | 8c12t SMP 启动（8 核 12 线程）    | 是         | 是                                                                                                                           |
 | 串口控制台（`uart_v500`）         | 是         | 是                                                                                                                           |
-| UFS（3 个 LUN，43 个分区）        | 是         | 是，HS-G4 / 2 lanes（读约 931 MB/s）                                                                                              |
+| UFS（HUF S）                       | 是         | 是，HS-G4 / 2 lanes（读约 931 MB/s）                                                                                              |
 | PCIe0（板载 ASM1064 SATA）     | 是         | 是，Gen3 x1 + `ahci`                                                                                                          |
 | PCIe1（外部 x1 插槽）            | 是         | 是，Gen3 x1；需 FF-A `SET_MEM_UNSEC`，BAR0 在总线侧 `0x90000000`、经低 4 GiB 的 56 MiB 窗口映射                                              |
 | Radeon 显卡（Oland）           | —         | **是**：5 个 ring + 5 个 IB 测试全部通过，fbdev 输出正常、屏幕文字可读                                                                            |
-| amdgpu                     | 未编入       | **桌面可用**：GMC/GART、UVD、fb0、DVI-I-1 控制台输出正常；56 MiB visible 检查和用户态 VRAM→GTT 策略已加入；X11 GNOME 桌面在 amdgpu DDX + glamor/radeonsi + DRI3 下正常运行，`glxinfo` 报告 `direct rendering: Yes`、GL 4.6 / GLES 3.2；555 秒停顿在第 3 轮未复现 |
+| amdgpu                     | 未编入       | **X11 + Weston 可用（有已知问题）**：GMC/GART、UVD、fb0、DVI-I-1 正常；amdgpu DDX + glamor/radeonsi + DRI3 下 GL 4.6 / GLES 3.2，Weston Wayland 也已跑通。已知：GNOME Wayland 因 6.18 缺 `CONFIG_TMPFS_POSIX_ACL`/`XATTR` 而回退 X11（defconfig 已补，正在重建）；X11 切分辨率会卡死（`ttm_bo_unpin`）；vsync 下只有半刷新率（1080p 33 FPS，关 vsync 148 FPS） |
 | 显示（厂商 DPU/HDMI）            | 是         | 尚未（只有厂商 `dkmd`）                                                                                                             |
-| initramfs 进入 rootfs chroot | —         | 是（`sdd2-chroot`，默认只读）                                                                                                       |
 
 ### 补丁来源
 
@@ -73,26 +69,6 @@ Linux 6.18 主线移植：构建脚本、补丁、内核配置、设备树和工
 
 - `tools/charlotte-diag.c`：aarch64 静态 MMIO dump 工具（`dump`、`blocks`、
   `ranges`、`find`、`fill`、`fbbars`、`fbinfo`）
-- `tools/sdd2-chroot`：initramfs 中挂载 rootfs（默认只读）并 chroot 的助手
-- `tools/initramfs-console-init.sh`：带 shell 重生循环的 initramfs init
-- `tools/initramfs-diag-init.sh`：早期 framebuffer/MMIO 诊断 init
-
-## 启动产物布局
-
-6.18 测试项使用独立目录，而不走发行版的 `kernel-install` 流程：
-
-```
-/boot/linux-6.18-charlotte/
-├── Image                      # 内核（未压缩 arm64 Image）
-├── Image.pre-pcie             # PCIe 系列之前的回滚镜像
-├── Image.safe                 # 早期已知可用镜像
-├── Image.ufsworking           # UFS 可用版镜像
-├── charlotte-9000c.dtb        # 匹配的设备树
-└── initramfs-console.cpio.gz  # 带 sdd2-chroot 的 busybox initramfs
-```
-
-GRUB 条目名为 `Linux 6.18 charlotte bring-up (TEST - uart console)`，
-只通过 `grub-reboot` 选择；GRUB 默认项必须保持在 5.10。
 
 ## 快速开始
 
@@ -110,29 +86,18 @@ GRUB 条目名为 `Linux 6.18 charlotte bring-up (TEST - uart console)`，
   [amdgpu_bringup_zh.md](amdgpu_bringup_zh.md) 第 8 节
 - USB 网卡 / 网络笔记：[中文](net_bringup_zh.md)
 - 显示移植计划：[中文](display_bringup_zh.md)
-- 补丁集与 rootfs chroot：[中文](rootfs_chroot_zh.md)
 - 完整移植报告：[中文](bringup_report_zh.md)
-- 串口日志：[docs/logs](logs/)
 
 ## 构建验证
 
-本仓库在 2026-11-24 做过端到端验证：干净的上游 `v6.18` + 7 个补丁 +
-`defconfig/charlotte_6.18_defconfig` 构建出的内核，配置与板子上当前可用的
-6.18 镜像完全一致；并且实际启动验证了：
-
-- 内核 `6.18.0-00007-g0f907a9a9106`，Image md5 `4690ec04b1a04b2183411104d17014ee`
-- UFS `sda`..`sdd`（HS-G4 链路）、PCIe0 Gen3 x1 + 板载 SATA（`ahci`）、
-  串口控制台、内置 amdgpu
-- DTB 与已安装版本一致（`b5232b5772bdefccd8a2bb2da7c1cdb4`）
-
-详情：[构建验证记录](build_verification_zh.md)。
+当前补丁系列和 `defconfig/charlotte_6.18_defconfig` 可以在干净的上游
+`v6.18` 上构建通过；配置一致性和 `git am` 冲突的踩坑记录见
+[构建验证记录](build_verification_zh.md)。
 
 ## 安全注意事项
 
-- 不要修改 GRUB 默认项，也不要覆盖 5.10 内核/rootfs。
-- 板上 `sdd` 只有 1 MiB 未分配区（扇区 256-511）可用于写入测试，务必先保存再恢复。
-- `/dev/ttyUSB0` 是单读者：抓串口前先结束残留的 `cat`。
-- 6.18 冷启动时不要读未上电的显示/PCIe MMIO 块，会触发 NoC SError 并复位。
+- 不要读未上电的显示/PCIe MMIO 块；6.18 冷启动时可能触发 NoC SError 并复位。
+- 板级部署、磁盘和 rootfs 操作不在本文范围内。
 
 ## 参考
 

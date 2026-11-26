@@ -18,7 +18,7 @@ IB 测试、显示输出全部通过，屏幕上可读到正常的内核日志�
 | CPU→VRAM 是否真实落地 | 是，BAR 与 GPU 引擎看到同一份 VRAM |
 | radeon 命令提交 | 5 个 ring + 5 个 IB 测试全部通过 |
 | 显示 | 1080p 帧缓冲输出正常，屏幕文字可读 |
-| amdgpu | 尚未迁移，见第 6 节 |
+| amdgpu | 已迁移：X11 桌面和 Weston Wayland 可用；GNOME Wayland 待 ACL 修复 |
 
 ## 1. PCIe1 的放行：FF-A 直连安全分区
 
@@ -240,10 +240,6 @@ ring 不在 VRAM：`CP_RB0_BASE = 0x00400010` 对应 GPU 地址
 
 ## 4. 验证结果
 
-Image SHA256：
-`0e1f97e971d1fccd4fc4010558e70fef8b485433075175a91a4da09013d8c772`，
-构建号 `#110`。
-
 命令提交：
 
 ```
@@ -275,9 +271,7 @@ VRAM 的帧缓冲内容。
 收缩到 56 MiB 可见；GPU 自身仍可用完整 1 GiB VRAM（GART 表、ring、
 显示都在其中）。
 
-补充验证（Image SHA256
-`d88eaf587853321fb23603ff890bfd46e4ddf30a711d2eaa7f1a5fc38a457495`，
-构建号 `#111`）：把 `rs600_gart_set_page()` 恢复成普通 `writeq()`（不再走
+补充验证：把 `rs600_gart_set_page()` 恢复成普通 `writeq()`（不再走
 `MM_INDEX/MM_DATA` 间接通路）后，GART 表写入正常，5 个 ring + 5 个 IB 测试
 依旧全部通过。说明之前的 MM 通路 hack 是不必要的。
 
@@ -304,15 +298,16 @@ VRAM 的帧缓冲内容。
 后续若要在本板上做通用化，建议直接采用 0001+0002+0003，并把 radeon 侧的
 局部改动撤掉；0004 可在需要更大低端窗口时再评估。
 
-## 6. 尚未完成
+## 6. 当前状态与遗留
 
-1. **迁移到 amdgpu（当前主线）**：radeon 在本板受“CPU 不能宽写 VRAM”和
-   “legacy KMS”两条限制，已决定放弃，迁移方案见第 11 节。
-2. **清理诊断打印**：`DIAG618` 系列（`vram uncached`、`gtt wc`、
-   `gart gpu=`、iATU dump）只用于定位，正式版本应移除。
-3. **桌面栈验证**：等 amdgpu 拿到 atomic KMS 后再验证现代合成器；
-   目前只验证到 GPU 渲染与 fbdev 输出。
-4. **视频硬解**：`oland_uvd.bin` 未内嵌，UVD 不可用（非阻塞项）。
+1. **amdgpu 已迁移并可用**：X11 GNOME 桌面和 Weston Wayland 均已跑通
+   （radeonsi/GLES 3.2）。GNOME Wayland 目前受 6.18 缺
+   `CONFIG_TMPFS_POSIX_ACL`/`CONFIG_TMPFS_XATTR` 阻塞，正在重建内核。
+2. **诊断打印**：仓库补丁已清理掉大部分 `DIAG618` 打印；板上工作树
+   仍保留少量定位输出，正式镜像前应移除。
+3. **桌面栈**：X11 和 Weston 已验证；X11 切分辨率仍有
+   `ttm_bo_unpin` 不平衡，Wayland 呈现路径在 vsync 下只有半刷新率。
+4. **视频硬解**：UVD 固件已内嵌，但未单独验证硬解；非阻塞项。
 
 ## 7. 已被推翻、不要重复的结论
 
@@ -336,44 +331,6 @@ VRAM 的帧缓冲内容。
 - 回滚单个源文件时用保留 mtime 的 `cp -a` 会让 `make` 认为无需重编译，
   镜像里仍是旧目标文件。回滚后必须确认构建日志里出现对应的 `CC`。
 
-## 8. 复现
-
-### 8.1 需要的源码改动
-
-1. `dts/charlotte.dtsi`：pcie1 `ranges` 拆成 1 MiB + 56 MiB + 原 64 位窗口
-   （见 2.3）。
-2. `drivers/pci/controller/dwc/pcie-designware-host.c`：在
-   `BUS_NOTIFY_BIND_DRIVER` 且 `device == 0x6611` 时把
-   `PCI_BASE_ADDRESS_0/1` 写成 `0x90000000 / 0`。
-3. `drivers/gpu/drm/radeon/si.c`：`si_mc_init()` 里对 `1002:6611` 覆盖
-   `aper_base = 0xea200000`、`aper_size = visible_vram_size = 0x3800000`。
-4. `drivers/gpu/drm/radeon/radeon_ttm.c`：
-   `radeon_ttm_io_mem_reserve()` 的 VRAM 分支用 `ttm_uncached`；
-   `radeon_ttm_tt_create()` 把 `ttm_cached` 改成 `ttm_write_combined`。
-5. initramfs 里放入 `radeon/oland_*.bin`（`oland_ce.bin`/`oland_me.bin`
-   是 `hainan_*` 的软链，复制时要去引用）。
-
-### 8.2 构建与启动
-
-```sh
-make ARCH=arm64 -j12 Image
-make ARCH=arm64 hisilicon/charlotte-9000c.dtb
-```
-
-GRUB 一次性入口（**不要改默认项**）：
-
-```
-linux /boot/linux-6.18-charlotte/Image earlycon=uart_v500,0xff894000 \
-      console=tty0 console=ttyHW0,115200n8 loglevel=8 \
-      arm64.nopauth panic=20 pcie_aspm=off pcie_port_pm=off
-devicetree /boot/linux-6.18-charlotte/charlotte-9000c.dtb
-initrd /boot/linux-6.18-charlotte/initramfs-console.cpio.gz
-```
-
-串口在 `ttyHW0`（115200 8N1）。PCIe1 上电后：
-`BAR2 = 0xea100000`，BAR0 总线地址 `0x90000000`、CPU 侧 `0xea200000`，
-`DBI = 0xedc00000`。
-
 ## 9. 相关文件
 
 | 路径 | 内容 |
@@ -384,19 +341,10 @@ initrd /boot/linux-6.18-charlotte/initramfs-console.cpio.gz
 | `dts/charlotte.dtsi` | pcie1 窗口定义 |
 | `patches/` | 已归集的补丁（0008 DTS、0009 FF-A） |
 
-## 10. 真实 rootfs 验证（2026-11-25）
+## 10. 真实系统验证（2026-11-25）
 
-在 initramfs 里验证通过后，用 6.18 直接挂载真实 rootfs 启动。为此需要补
-四项与 GPU 无关、但缺一就起不来的东西：
-
-| 问题 | 现象 | 处理 |
-|---|---|---|
-| 根设备解析 | `VFS: Cannot open root device "UUID=..."`（`unknown-block(0,0)`） | 改用 `root=PARTUUID=... rootwait rootfstype=ext4`；UFS 是异步扫描，`UUID=` 不可靠 |
-| systemd | `Failed to mount tmpfs ... /sys/fs/cgroup` → `Freezing execution` | `CONFIG_CGROUPS=y`（含 SCHED/FREEZER/DEVICE/CPUACCT/BPF） |
-| 必需挂载 | `/boot/efi`（fstab 里 vfat）挂不上 → 进 emergency mode | `CONFIG_VFAT_FS`、`MSDOS_FS`、`NLS_CODEPAGE_437`、`NLS_ISO8859_1` |
-| 固件加载 | `radeon/OLAND_pfp.bin` 加载失败，GPU init 直接放弃 | radeon 是内建驱动，`module_init` 早于 rootfs 挂载，`/lib/firmware` 还不存在；把 `oland_*.bin` 用 `CONFIG_EXTRA_FIRMWARE` 编进内核 |
-
-补齐后 rootfs 正常启动，radeon 完整初始化（5 ring + 5 IB 全过）。
+内建 GPU 驱动早于 rootfs 挂载，`oland_*.bin` 必须用
+`CONFIG_EXTRA_FIRMWARE` 编进内核，不能依赖 `/lib/firmware`。
 
 ### 10.1 已验证可用的 GPU 路径
 
@@ -418,8 +366,11 @@ initrd /boot/linux-6.18-charlotte/initramfs-console.cpio.gz
 - `multi-user.target` 下完全稳定。
 
 因此这是合成器特有的路径（KMS 模式设置/扫描输出相关），尚未定位到
-具体 ioctl。注意每次 panic 后 rootfs 需要做 fsck（231 GB），重启代价
-较高，后续排查建议先在 `multi-user` 下用最小程序复现。
+具体 ioctl。后续排查建议在 `multi-user` 下用最小程序复现。
+
+> 说明：这是 radeon/早期 amdgpu 时代的记录。后续 amdgpu 采用用户态
+> BO → GTT 策略（补丁 0012），X11 和 Weston 均未再触发该 SError；
+> 本节保留为踩坑记录。
 
 ### 10.3 连接器 `disconnected` 的原因：显示器输入源
 
@@ -527,7 +478,7 @@ CPU 直接访问 VRAM 的机会。
 4. **系统内存一致性**：`amdgpu_ttm_tt_create()` 里把 `ttm_cached`
    改为 `ttm_write_combined`（GPU 非嗅探读，缓存映射会读到旧数据）。
 5. **构建与验证**：先只替换驱动内核进 initramfs，确认
-   `ring gfx/compute/dma1/dma2 test succeeded`，再进 rootfs 验证渲染。
+   `ring gfx/compute/dma1/dma2 test succeeded`，再做渲染验证。
 
 ### 11.4 amdgpu 迁移中的实测排除（2026-11-26）
 
@@ -549,10 +500,10 @@ CPU 直接访问 VRAM 的机会。
 结论：**CPU 经 BAR 访问 VRAM 已完全验证可用**，包括连续写。剩余 SError
 不是 CPU 写路径造成的。由于出问题的代码
 （`amdgpu_gtt_mgr_recover` → `amdgpu_ttm_gart_bind`）会构造 IB 并提交
-GPU 作业、由 SDMA 把 PTE 写入 VRAM，下一步应转向 GPU 侧 DMA（入向窗口 /
-GART 地址）而不是 BAR。
+GPU 作业、由 SDMA 把 PTE 写入 VRAM，当时怀疑方向是 GPU 侧 DMA；后续确认
+根因是 GTT 系统内存的缓存一致性，修正后 GART 恢复通过。
 
-### 11.4 amdgpu SError 的逐层二分（2026-11-26）
+### 11.5 amdgpu SError 的逐层二分（2026-11-26）
 
 按“跳过 + 打点”的方式逐层缩小，结论如下（每一步都记录在串口日志里）：
 
@@ -572,7 +523,7 @@ VRAM 映射改成 Device（`ttm_uncached`）解决。amdgpu 这边的映射已�
 Device（`res->bus.caching=0`、每-BO `ioremap()`、无 `aper_base_kaddr`），
 所以还需要检查这个 clear-state BO 的实际落点与大小是否都在 56 MiB 窗口内。
 
-### 11.5 amdgpu SError 的最终根因与修复（2026-11-26）
+### 11.6 amdgpu SError 的最终根因与修复（2026-11-26）
 
 逐层二分后定位到 `gfx_v6_0_get_csb_buffer()` → `amdgpu_gfx_csb_data_parser()`。
 两者都是**逐 u32 写**的循环：
@@ -603,7 +554,7 @@ PCIe1 的通路只接受 **≤8 字节的单次写**，于是这条 16 字节存
 这条结论对后续所有“内核往 VRAM BO 写数据”的路径都适用：只要编译器可能
 把多次小写合并成 >8 字节的存储，就需要同样的处理。
 
-### 11.6 SError 修复后的状态（2026-11-26）
+### 11.7 SError 修复后的状态（2026-11-26）
 
 修复 CSB 写入后，amdgpu 可以完整走完驱动初始化，不再 panic，停在
 `ring gfx test failed (-110)`。超时处的实测数据：
@@ -621,10 +572,8 @@ VM fault0 status=0
 期望值；无 VM fault、无 SError。ring 在 GTT 且已是非缓存映射，CPU 写入
 对 CP 可见（rptr 能推进就是证据）。
 
-下一步应对比 radeon 的 ring test 路径，确认 CP 侧写 scratch 未生效的原因
-（寄存器偏移、CP 微码入口、或 ME/PFP 的启动状态）。
 
-### 11.7 CP scratch 未写回的进一步观察（2026-11-26）
+### 11.8 CP scratch 未写回的进一步观察（2026-11-26）
 
 在 `gfx_v6_0_ring_test_ring()` 的测试包写入后立即 dump（而不是等超时）：
 
@@ -644,16 +593,14 @@ CP_RB0_RPTR=0x1d0
 CP_ME_CNTL=0x0   CP_RB0_CNTL=0x90b   CP_RB0_BASE=0xff006190
 ```
 
-与 radeon 通过时一致。因此剩余问题收敛为“CP 执行了 SET_CONFIG_REG 但没有
-落到目标寄存器”，下一步应核对 SI 上 `PACKET3_SET_CONFIG_REG` 的偏移基准
-（`mmSCRATCH_REG0` 与 `PACKET3_SET_CONFIG_REG_START` 的单位）以及 ME 的
-初始化状态。
+与 radeon 通过时一致。早期判断是“CP 执行了 SET_CONFIG_REG 但没有落到
+目标寄存器”；后续修正 ring test dump 的 dword 索引并恢复 GMC/GART 后，
+amdgpu 初始化返回 0，X11/Weston 均可用。本节保留为定位过程记录。
 
-### 11.4 风险
+### 11.9 剩余风险
 
 - amdgpu 的 VRAM 管理器按 1 GiB 管理，只有 56 MiB 对 CPU 可见；扫描
   输出和 CPU 可见对象必须落在可见段内，需要确认 `amdgpu_bo_pin` 与
   显示代码的放置策略。
 - 若 amdgpu 的某些路径仍然 CPU 映射 VRAM（例如固件上传、影子缓冲），
   同样会撞上宽度限制，需要逐个确认。
-- 退路：保留现有 radeon Image 与源码备份，任何一步失败可以立即回滚。

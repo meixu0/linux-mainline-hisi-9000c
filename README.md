@@ -4,9 +4,8 @@ English | [中文](docs/README_zh.md)
 
 Build scripts, patches, kernel configuration, DTS files and tools for bringing up mainline Linux 6.18 on the HUAWEI Kirin 9000C SBC (codename `charlotte`, board `QHW-100` / `SP1PANGUXM`).
 
-The board chain-loads Linux through UEFI -> GRUB. The stock vendor 5.10 kernel
-(`5.10.97-38-9000c`) stays the default boot entry; the 6.18 image is a manual
-one-shot test entry (`grub-reboot`).
+The board boots through UEFI. The stock vendor 5.10 kernel
+(`5.10.97-38-9000c`) stays the default; the 6.18 image is a separate test build.
 
 ## What is included
 
@@ -16,12 +15,10 @@ one-shot test entry (`grub-reboot`).
 - `defconfig/`: local kernel configuration used for the 6.18 build
 - `drivers/`: local mirrors of the driver sources added/modified by the series
 - `dts/`: local mirrors of the board DTS/DTSI used by the series
-- `docs/`: bring-up notes, build guide and captured serial logs
+- `docs/`: bring-up notes and build guide
 - `firmware/`: firmware notes (no board firmware blob is required for 6.18)
-- `packaging/`: notes on the vendor reference packages used during bring-up
-- `tools/`: on-device helpers (MMIO diagnostic tool, initramfs scripts, chroot helper)
+- `tools/`: on-device helpers (MMIO diagnostic tool)
 - `scripts/ci/`: non-interactive build script
-- `scripts/local/`: scripts meant to be run on the board itself
 
 ### Feature status
 
@@ -33,9 +30,8 @@ one-shot test entry (`grub-reboot`).
 | PCIe0 (onboard ASM1064 SATA)          | yes         | yes, Gen3 x1 + `ahci`                                                     |
 | PCIe1 (external x1 slot)              | yes         | yes, Gen3 x1; needs FF-A `SET_MEM_UNSEC`; BAR0 at bus `0x90000000`, 56 MiB CPU window at `0xea200000` |
 | USB Ethernet (RTL8153 / `r8152`)      | yes         | yes, 1000/full, DHCP + IPv6                                               |
-| amdgpu                                | not built   | yes: X11 GNOME desktop, amdgpu DDX + glamor/radeonsi + DRI3, GL 4.6 / GLES 3.2 |
+| amdgpu                                | not built   | yes: X11 GNOME and Weston Wayland, radeonsi/GLES 3.2; known issues below |
 | Display (vendor DPU/HDMI)             | yes         | not yet (vendor `dkmd` only)                                              |
-| Rootfs chroot from initramfs          | n/a         | yes (`sdd2-chroot`, read-only by default)                                 |
 | Network in initramfs                  | n/a         | yes (`net-dhcp`)                                                          |
 
 ### Patch sources
@@ -65,32 +61,27 @@ Kirin 9000C UFS/PCIe/clock blocks are different.
 - `0013`: add the SI PASID TLB flush callback
 - `0014`: use I/O accessors for SI reset magic and UVD messages
 
+### Known issues / current work
+
+- GNOME Wayland currently falls back to X11: the 6.18 config lacks
+  `CONFIG_TMPFS_POSIX_ACL` / `CONFIG_TMPFS_XATTR`, so logind cannot apply
+  session ACLs to `/dev/dri/*` and Mutter fails to take DRM master. The
+  defconfig now enables both; a rebuilt image is being verified.
+- X11 mode switching can hang; `dce_v6_0_crtc_do_set_base` shows an
+  unbalanced `ttm_bo_unpin` after scanout BOs move between VRAM and GTT.
+- Weston with vsync is half the monitor refresh (33 FPS at 1080p60,
+  17 FPS at 4K30); with `vblank_mode=0` it reaches ~148 FPS / 115 FPS.
+  This is a presentation-path issue (legacy non-atomic DRM), not GPU
+  rendering capacity.
+- The GPU may idle at power level 0 (30 MHz). For tests, force
+  `power_dpm_force_performance_level=high` (825/1000 MHz).
+
 ### Tools
 
 - `tools/charlotte-diag.c`: freestanding aarch64 MMIO dump tool (`dump`, `blocks`,
   `ranges`, `find`, `fill`, `fbbars`, `fbinfo`)
-- `tools/sdd2-chroot`: initramfs helper that mounts the rootfs read-only and
-  chroots into it
 - `tools/initramfs-console-init.sh`: initramfs init with a respawning shell
 - `tools/initramfs-diag-init.sh`: early framebuffer/MMIO diagnostic init
-
-## Boot artifact layout
-
-The 6.18 test entry uses a dedicated directory instead of the distro
-`kernel-install` flow:
-
-```
-/boot/linux-6.18-charlotte/
-├── Image                      # kernel (uncompressed arm64 Image)
-├── Image.pre-pcie             # rollback image before the PCIe series
-├── Image.safe                 # known-good early image
-├── Image.ufsworking           # UFS-working image
-├── charlotte-9000c.dtb        # matching device tree
-└── initramfs-console.cpio.gz  # busybox initramfs with sdd2-chroot
-```
-
-The GRUB entry is named `Linux 6.18 charlotte bring-up (TEST - uart console)` and
-is only selected through `grub-reboot`; the GRUB default must stay on 5.10.
 
 ## Getting started
 
@@ -100,30 +91,17 @@ is only selected through `grub-reboot`; the GRUB default must stay on 5.10.
 - amdgpu bring-up and desktop evidence: [中文](docs/amdgpu_bringup_zh.md)
 - USB Ethernet / network notes: [中文](docs/net_bringup_zh.md)
 - Display bring-up plan: [中文](docs/display_bringup_zh.md)
-- Patch set and rootfs chroot: [中文](docs/rootfs_chroot_zh.md)
 - Full bring-up report: [中文](docs/bringup_report_zh.md)
-- Serial logs: [docs/logs](docs/logs/)
 
 ## Build verification
 
-The repository was verified end-to-end on 2026-11-24: a clean upstream `v6.18`
-checkout, the patch series and `defconfig/charlotte_6.18_defconfig` build an
-Image whose configuration is identical to the working 6.18 image on the board.
-The image was booted and reproduces the expected functionality:
-
-- kernel `6.18.0-00007-g0f907a9a9106`, Image md5 `4690ec04b1a04b2183411104d17014ee`
-- UFS `sda`..`sdd` (HS-G4 link), PCIe0 Gen3 x1 + onboard SATA (`ahci`),
-  UART console, built-in amdgpu
-- matching DTB (`b5232b5772bdefccd8a2bb2da7c1cdb4`)
-
-Details: [中文](docs/build_verification_zh.md).
+The patch series and `defconfig/charlotte_6.18_defconfig` build cleanly on a
+fresh upstream `v6.18` checkout.  The historical verification, the configuration
+consistency check and the `git am` conflict pitfall are recorded in
+[中文](docs/build_verification_zh.md).
 
 ## Safety notes
 
-- Never change the GRUB default or overwrite the 5.10 kernel/rootfs.
-- The board has a single 1 MiB unallocated region on `sdd` (sectors 256-511) used
-  for write tests; always save and restore its contents.
-- `/dev/ttyUSB0` is single-reader: stop any stale `cat` before capturing.
 - Do not read unpowered display/PCIe MMIO blocks; on a cold 6.18 boot they can
   trigger a NoC SError and reset the board.
 

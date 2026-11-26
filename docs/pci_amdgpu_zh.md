@@ -12,9 +12,10 @@
 > [`mariobalanica/arm-pcie-gpu-patches`](https://github.com/mariobalanica/arm-pcie-gpu-patches)，
 > 其中 0001/0002/0003 分别对应“Device 映射 + 对齐修复 + sysmem 强制 WC”。
 >
-> **2026-11-26 更新（已完成）**：同样的修正已迁移到 amdgpu，X11 GNOME
-> 桌面可用（amdgpu DDX + glamor/radeonsi + DRI3）。剩余现象、补丁编号
-> 和证据边界见 [`amdgpu_bringup_zh.md`](amdgpu_bringup_zh.md)。
+> **2026-11-26 更新**：同样的修正已迁移到 amdgpu，X11 GNOME 桌面和
+> Weston Wayland 均可用（radeonsi/GLES 3.2）。GNOME Wayland 目前受
+> 6.18 缺 `CONFIG_TMPFS_POSIX_ACL`/`XATTR` 阻塞，正在重建；剩余现象、
+> 补丁编号和证据边界见 [`amdgpu_bringup_zh.md`](amdgpu_bringup_zh.md)。
 
 ## 1. 5.10 上的 PCIe 现状（实测）
 
@@ -134,22 +135,23 @@ cat /sys/bus/pci/devices/0000:00:00.0/resource   # 桥窗口
   - 或者用 64 位窗口（CPU 地址 >4 GB，NoC 是否支持未知）。
 - 这一步要等有卡时用 5.10 实测，不能盲试。
 
-## 6. 下一步
+## 6. 当前状态（已完成）
 
-1. 编 6.18（PCIe0 + amdgpu 内置），串口验证 SATA 链路。
-2. 成功后加 PCIe1（x1 插槽）节点，验证空槽 `Link Fail` 不崩。
-3. 用户插 AMD 卡后：先 5.10 `lspci -vv` 看 BAR，再决定是否直接试 6.18。
-4. 6.18 下 amdgpu 起来后，fbcon 应该直接出现在 AMD 卡的 HDMI 上。
+1. 6.18 的 PCIe0（板载 SATA）和 PCIe1（x1 插槽）链路都已打通。
+2. amdgpu 已迁移并可用：X11 GNOME 桌面和 Weston Wayland 均跑通
+   （radeonsi/GLES 3.2）。
+3. GNOME Wayland 目前受 6.18 缺 `CONFIG_TMPFS_POSIX_ACL`/`XATTR`
+   阻塞，正在重建内核；X11 切分辨率仍有 `ttm_bo_unpin` 不平衡。
+4. 详细证据见 [`amdgpu_bringup_zh.md`](amdgpu_bringup_zh.md) 第 8 节。
 
 ---
 
 ## 7. 结果：6.18 PCIe0（板载 SATA）已经打通
 
-最终 Image：`/boot/linux-6.18-charlotte/Image`，md5 `8247f40db86c917609d81daac7efa5ef`
-（对应内核提交 `5730540 pci: dwc: add charlotte PCIe host support`，
-补丁 `patches/0007-pci-dwc-add-charlotte-PCIe-host-support.patch`）。
+结果：6.18 的 PCIe0 链路、BAR 分配和 `ahci` 枚举全部正常；对应补丁
+`patches/0007-pci-dwc-add-charlotte-PCIe-host-support.patch`。
 
-6.18 串口日志（`logs/` 里也保存了）：
+6.18 启动日志：
 
 ```
 charlotte-pcie f8000000.pcie: PCIe0 power-on
@@ -202,11 +204,11 @@ charlotte-pcie f8000000.pcie: host ready, link=1
 
 - 配置：`CONFIG_PCI=y`、`CONFIG_PCIE_DW=y`、`CONFIG_PCIE_DW_HOST=y`、
   `CONFIG_PCIE_CHARLOTTE=y`、`CONFIG_ATA=y`、`CONFIG_SATA_AHCI=y`、
-  `CONFIG_DRM_AMDGPU=y`、`CONFIG_...`（SI/CIK/USERPTR 全开）。
+  `CONFIG_DRM_AMDGPU=y`、`CONFIG_DRM_AMDGPU_SI=y`、`CONFIG_DRM_RADEON=n`。
 - `vmlinux` 里有 `amdgpu_init`，说明 amdgpu 已经编进 6.18（不是模块，
   因为 `DRM_AMDGPU` 被 olddefconfig 提升成了 y；功能等价，启动即加载）。
-- 用户态固件：sdd2 的 `/lib/firmware/amdgpu`（699 个文件）和 mesa
-  `radeonsi_dri.so` 都已具备，不需要额外安装。
+- 用户态固件：`/lib/firmware/amdgpu` 和 mesa
+  `radeonsi_dri.so` 已具备，不需要额外安装厂商驱动。
 
 ## 10. PCIe1（x1 插槽）早期分析
 
@@ -246,14 +248,16 @@ power_misc {
 后仍能读回写入值），已改用“总线侧 `0x90000000` + 低 4 GiB 56 MiB
 窗口”。细节见 [`pcie1_ffa_bar_zh.md`](pcie1_ffa_bar_zh.md)。
 
-## 11. 当前结论（2026-11-25 更新）
+## 11. 当前结论（2026-11-26 更新）
 
-- 6.18 的 **PCIe0**（板载 SATA）和 **PCIe1**（x1 插槽）链路都已打通。
-- PCIe1 需要 FF-A `SET_MEM_UNSEC` 放行；256 MiB 的 BAR0 放在总线侧
-  `0x90000000`，由低 4 GiB 的 56 MiB 窗口（`0xea200000` 起）映射。
-- **radeon 下已完全打通**：5 个 ring + 5 个 IB 测试全部通过，fbdev
-  输出正常、屏幕文字可读。
-- 曾经卡住的 gfx ring test 已定位为三个原因：BAR 地址未真实路由、
-  VRAM 使用 Normal-NC 映射、GTT 系统内存被缓存。三者缺一不可。
-- 剩余工作：把这三处修正迁移到 amdgpu。详见
-  [`pcie1_ffa_bar_zh.md`](pcie1_ffa_bar_zh.md) 第 3、6 节。
+- PCIe0 / PCIe1 链路均已打通；PCIe1 需要 FF-A `SET_MEM_UNSEC`，
+  BAR0 放在总线侧 `0x90000000`，由低 4 GiB 的 56 MiB 窗口
+  （`0xea200000` 起）映射。
+- radeon 和 amdgpu 都能完成 GPU 初始化；amdgpu 已进入 X11 GNOME
+  桌面和 Weston Wayland（radeonsi）。
+- 卡住 gfx ring test 的三个原因（BAR 未路由、VRAM Normal-NC、GTT
+  缓存）是这一阶段最重要的坑；amdgpu 侧又补了用户态 GTT 策略、
+  SI PASID flush 和 8 字节安全访问器。
+- 剩余问题：GNOME Wayland 的 logind ACL（内核配置）、X11 分辨率
+  切换的 pin/unpin、Wayland vsync 半刷新率、DPM 升频。详见
+  [`amdgpu_bringup_zh.md`](amdgpu_bringup_zh.md) 第 8.8–8.10 节。

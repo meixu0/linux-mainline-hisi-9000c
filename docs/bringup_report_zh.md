@@ -2,15 +2,14 @@
 
 - 日期：2026-11-23
 - 目标机：QHW-100 / SP1PANGUXM（DMI: Dalian Guoxun QHW-100），BIOS 1.00.07 04/16/2025
-- 远端：板端主机（串口 + 局域网 SSH），工作目录 `~/9000c`
-- 自建内核：Linux 6.18.0（`charlotte_defconfig`，源码 `~/9000c/kernel-port/linux-6.18`）
+- 自建内核：Linux 6.18.0（`charlotte_defconfig`）
 - 对照内核：厂商 `5.10.97-38-9000c`（Android BSP 派生）
-- 串口：`/dev/ttyUSB0`（CH340），115200 8N1
 
 > **更新（2026-11-24）**：本报告写于 2026-11-23，当时 UFS/PCIe/amdgpu 均未开始。
-> 后续进展：UFS 已完成（HS-G4）、PCIe0（板载 SATA）已打通、amdgpu 已编入 6.18。
-> 详见 `ufs_bringup_zh.md`、`pci_amdgpu_zh.md`、`build_verification_zh.md`。
-> 仍未完成：PCIe1（x1 插槽）电源与 AMD 卡验证、显示（厂商 DPU）。
+> 后续进展：UFS 已完成（HS-G4）、PCIe0（板载 SATA）已打通、amdgpu 已进入
+> X11 GNOME 和 Weston Wayland；GNOME Wayland 待 logind ACL 配置修复。
+> 详见 `ufs_bringup_zh.md`、`amdgpu_bringup_zh.md`、`build_verification_zh.md`。
+> 仍未完成：板载厂商 DPU/HDMI 路径；GNOME Wayland 待 logind ACL 修复。
 
 ---
 
@@ -19,23 +18,20 @@
 | # | 问题 | 状态 | 一句话结论 |
 |---|---|---|---|
 | 1 | 6.18 只起来 4 个 CPU | **已解决** | 启动核声明 PAC、其余核不声明，`ARM64_HAS_ADDRESS_AUTH` 冲突。加 `arm64.nopauth` 后 8c12t（12 个逻辑 CPU）全可用。 |
-| 2 | 6.18 无显示（黑屏、显示器报无信号） | **已定位，未修复** | 固件交接时关掉了整个显示子系统；6.18 没有对应的电源/时钟/DPU 驱动。efifb 写显存有效但无人扫描输出。 |
+| 2 | 板载 DPU/HDMI 无显示 | **已定位，未移植** | 固件交接时关掉了显示子系统；6.18 没有对应的电源/时钟/DPU 驱动。PCIe1 独立显卡的 amdgpu 显示已可用。 |
 | 3 | 没有可用的调试通道 | **已解决** | 新增 V500 UART 驱动，`ttyHW0` 双向控制台可用（并修好了 RX 32 字节门限与 TX 丢字）。 |
-| 4 | 根文件系统 / 存储 | **已解决** | UFS（HUF S）已移植：`sda`/`sdb` 4MiB、`sdc` 480MiB、`sdd` 238GiB（43 分区），HS-G4 / 2 lanes，读约 931 MB/s。 |
-| 5 | PCIe | **已解决（PCIe0）** | 板载 ASM1064 SATA 训练到 Gen3 x1，`ahci` 正常；x1 插槽（PCIe1）待 LDO16 电源。 |
-| 6 | amdgpu | **已编入** | 6.18 内置 `CONFIG_DRM_AMDGPU=y`，需要 AMD 卡 + PCIe1 电源才能实际出图。 |
+| 4 | 根文件系统 / 存储 | **已解决** | UFS（HUF S）已移植，HS-G4 / 2 lanes，读约 931 MB/s。 |
+| 5 | PCIe | **已解决** | PCIe0（板载 SATA）和 PCIe1（x1 插槽）均训练到 Gen3 x1；PCIe1 经 FF-A 放行和 56 MiB 窗口访问。 |
+| 6 | amdgpu | **可用** | X11 GNOME 和 Weston Wayland 均可用；GNOME Wayland 待 logind ACL 修复。 |
 
-**当前机器状态（2026-11-24）**：默认仍运行 5.10；6.18 测试项为 PCIe 可用版
-（`/boot/linux-6.18-charlotte/Image`，md5 `8247f40db86c917609d81daac7efa5ef`）。
-本次仓库构建验证的镜像保留为 `Image.repotest`（md5 `4690ec04b1a04b2183411104d17014ee`）。
-GRUB 默认项仍是 5.10，6.18 通过 `grub-reboot` 一次性进入。
+**当前机器状态**：厂商 5.10 仍是默认；6.18 是独立测试镜像。
 
 ---
 
 ## 二、平台与启动链
 
 ```
-fastboot -> UEFI payload（伪装成 Android boot.img）-> GRUB -> Linux Image + 自建 DTB
+fastboot -> UEFI payload（伪装成 Android boot.img）-> Linux Image + 自建 DTB
 ```
 
 - SoC：Kirin 9000C。DT 里的 CPU `compatible`（a55/a76/a53）是**误导性的**：
@@ -71,7 +67,7 @@ smp: Brought up 1 node, 4 CPUs
 
 命令行加 `arm64.nopauth`（`arch/arm64/kernel/pi/idreg-override.c` 中的别名，清 `ID_AA64ISAR1/2` 的 PAC 位）。
 
-实测（串口）：
+实测：
 
 ```
 CPU features: SYS_ID_AA64ISAR1_EL1[27:24]: forced to 0
@@ -82,12 +78,12 @@ nr_cpu_ids=12
 
 ---
 
-## 四、问题 2：无显示（已定位，未修复）
+## 四、问题 2：板载 DPU/HDMI 无显示（已定位，未移植）
 
 ### 现象
 
-- GRUB 菜单在 HDMI 上正常可见（1920×1080）。
-- 选中 6.18 的**瞬间**画面消失，显示器随后进入**待机/“无信号”**。
+- UEFI/bootloader 菜单在 HDMI 上正常可见（1920×1080）。
+- 切换到 6.18 的**瞬间**画面消失，显示器随后进入**待机/“无信号”**。
 - 5.10 启动正常（4K，`hisi-dpudrmfb`）。
 
 ### 证据链
@@ -173,7 +169,7 @@ nr_cpu_ids=12
 
 ---
 
-## 五、问题 3：串口控制台（已完成）
+## 五、问题 3：UART 控制台（已完成）
 
 ### 驱动
 
@@ -219,144 +215,9 @@ Linux (none) 6.18.0 ... aarch64 GNU/Linux
 
 ---
 
-## 六、复现与操作
+## 六、已知限制
 
-### GRUB 测试项
-
-`/etc/grub.d/40_custom`，标题 `Linux 6.18 charlotte bring-up (TEST - uart console)`：
-
-```
-linux /boot/linux-6.18-charlotte/Image earlycon=uart_v500,0xff894000 \
-      console=ttyHW0,115200n8 loglevel=7 arm64.nopauth panic=20
-devicetree /boot/linux-6.18-charlotte/charlotte-9000c.dtb
-initrd /boot/linux-6.18-charlotte/initramfs-console.cpio.gz
-```
-
-- `earlycon`：最早的轮询控制台；`console=ttyHW0`：唯一真 console（故意不放 `console=tty0`，避免日志跑到黑屏）。
-- `arm64.nopauth`：8c12t（12 逻辑 CPU）修复。
-- `panic=20`：panic 后自动重启回 5.10，不再需要手动断电。
-
-### 单次启动到 6.18（无需人在机器旁）
-
-```sh
-sudo grub-reboot "Linux 6.18 charlotte bring-up (TEST - uart console)"
-sudo reboot
-```
-
-`next_entry` 只生效一次；之后默认仍回 5.10。
-
-### 构建
-
-```sh
-cd ~/9000c/kernel-port/linux-6.18
-make ARCH=arm64 charlotte_defconfig
-make ARCH=arm64 -j"$(nproc)" Image hisilicon/charlotte-9000c.dtb
-```
-
-### 产物
-
-```
-/boot/linux-6.18-charlotte/Image                     # 安全版（串口可用，无探测代码）
-/boot/linux-6.18-charlotte/Image.prev                # 最初的 6.18 版本（4 核、无串口驱动）
-/boot/linux-6.18-charlotte/initramfs-console.cpio.gz # 挂载后直接在 ttyHW0 起 shell
-/boot/linux-6.18-charlotte/initramfs-diag.cpio.gz    # 早期的显示诊断 initramfs
-/boot/linux-6.18-charlotte/charlotte-9000c.dtb
-
-~/9000c/kernel-port/out/Image-6.18-uart              # 当前安全版副本
-~/9000c/kernel-port/out/Image-6.18-probe             # 带 DSS 探测（会 panic，仅实验）
-```
-
-### 回滚
-
-- 不选测试项即可（默认 5.10）。
-- 或 `cp /boot/linux-6.18-charlotte/Image.prev /boot/linux-6.18-charlotte/Image`。
-- `/etc/grub.d/` 里**不要**留 `*.bak`：`update-grub` 会把它们当脚本执行，导致重复菜单项（已踩过，备份都移到 `/root/grub-backups/`）。
-
----
-
-## 七、串口调试注意事项
-
-1. **单读者**：`/dev/ttyUSB0` 的一个字节只会被一个进程取走。
-   同时开 `cat` 和 `picocom` 会让两边日志都“随机缺字”，看起来像内核丢字符。
-   排查前先 `pgrep -af ttyUSB`。
-2. 打开 picocom 后先按一次回车（提示符不会重发）。
-3. 当前登录会话的补充组可能是旧的；必要时用 `sg dialout -c 'picocom -b 115200 /dev/ttyUSB0'`。
-4. 不占终端时也可直接写串口发命令：`sg dialout -c 'printf "uname -a\r" > /dev/ttyUSB0'`。
-
----
-
-## 八、已知限制
-
-- 6.18 已能枚举 UFS 磁盘（`sda`..`sdd`）并从 sdd2 chroot；PCIe0 + 板载 SATA 可用；仍无网络和显示（initramfs 没有网络驱动）。
-- 无 USB 键盘/鼠标输入到 shell 的通道（只能用串口）。
-- 显示相关探测读 DPU 会触发 SError panic（`panic=20` 可自动恢复）；**当前安装的 Image 不含该探测代码**。
-- 6.18 的 DT 已包含 CPU/GIC/timer/UART/UFS/PCIe0/PCIe1 节点；PMIC、显示和网络仍未描述。
-
----
-
-## 九、后续路线（按性价比排序）
-
-1. **PCIe1（x1 插槽）/ AMD 亮机卡**（当前主线）
-   先补 PMIC `LDO16`（`pcieSwitch`，2.5V）电源，保证空槽时 link down 不 panic；
-   插卡后先确认 VRAM BAR 能否放进 59 MB 的窗口。详见 `pci_amdgpu_zh.md`。
-
-2. **显示：电源/时钟**
-   - 先做 5.10 vs 6.18 的 **CRG 全量 diff**（5.10 有参考值，6.18 的 `0xE8D01000` 可读），确定哪些门控被关。
-   - 研究 LPM3 邮箱上电协议（`IPC_ACPU_LPM3_MBX_2`），或找到等效的 AOD 触发方式。
-   - 目标：让 `0xE8800000` 可读，拿到 UEFI 留下的寄存器状态。
-
-3. **显示：DPU + HDMI**
-   复用 `dkmd/dpu/begonia` 的寄存器序列写最小驱动（固定分辨率、线性 framebuffer），再做 HDMI PHY/PLL 与 SMMU。
-
-4. 其它小项：initramfs 用 `setsid cttyhack sh -i` 打开作业控制；加 getty；补 `/dev` 常用节点。
-
----
-
-## 十、交付物与改动清单
-
-### 远端源码改动（`~/9000c/kernel-port/linux-6.18`）
-
-| 文件 | 说明 |
-|---|---|
-| `drivers/tty/serial/uart-v500.c` | 新增：V500 UART PIO 驱动 + console |
-| `drivers/tty/serial/Kconfig` | 新增 `SERIAL_UART_V500` / `SERIAL_UART_V500_CONSOLE` |
-| `drivers/tty/serial/Makefile` | `obj-$(CONFIG_SERIAL_UART_V500) += uart-v500.o` |
-| `arch/arm64/configs/charlotte_defconfig` | 打开上述两个符号 |
-| `drivers/misc/dss-power-probe.c` | 新增：显示电源/时钟探测（默认关闭，`CONFIG_DSS_POWER_PROBE`） |
-| `drivers/misc/Kconfig` / `Makefile` | 对应配置项 |
-| `arch/arm64/boot/dts/hisilicon/charlotte-9000c.dts` / `charlotte.dtsi` | 已有的最小 DTB（uart0/aliases/chosen） |
-
-### 本机文档与脚本（`~/9000c`）
-
-```
-bringup_report_zh.md                    # 本报告（权威版）
-status_zh.md                            # 过程记录/工作笔记（含更多中间数据）
-logs/6.18-uart-console-boot.log           # 串口控制台成功启动 + 交互
-logs/6.18-diag-boot.log                   # 显示诊断（fbcon 像素统计 + SError）
-logs/6.18-dss-probe.log                   # 电源/时钟干净探测日志
-artifacts/uart-v500.c                     # 驱动源码副本
-artifacts/initramfs-console-init.sh       # 控制台 initramfs 的 init
-artifacts/charlotte-diag.c                # 早期 MMIO/fb 诊断工具
-artifacts/initramfs-diag-init.sh
-```
-
-### 关键日志摘录
-
-```
-# CPU
-CPU features: SYS_ID_AA64ISAR1_EL1[27:24]: forced to 0
-CPU4: Booted secondary processor 0x0000000400 [0x482fd424]
-cpus: 0-11
-
-# 显示
-efifb: framebuffer at 0x54017000, using 8100k, total 8100k
-fb0 nonzero_pixels=50715/2073600
-显示器：无信号 / 待机
-devmem 0xe8800000 -> SError -> Kernel panic
-
-# 串口
-uart-v500 ff894000.serial: ttyHW0 irq 14 uartclk 112000000
- 14: ... GICv3 427 Level uart-v500
-~ # uname -a
-Linux (none) 6.18.0 ... aarch64 GNU/Linux
-```
+- 未上电的显示/PCIe MMIO 块不能读，否则触发 NoC SError；当前 6.18 Image
+  不含相关探测代码。
+- PMIC、板载 DPU/HDMI 显示和厂商网络路径仍未移植；PCIe1 独立显卡的
+  amdgpu 路径已可用。
