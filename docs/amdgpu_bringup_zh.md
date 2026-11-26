@@ -737,7 +737,7 @@ Wayland 验证。优先 GL 路径：当前硬件加速已有成功证据，而 P
 - 6.18 内核配置缺 `CONFIG_TMPFS_POSIX_ACL` / `CONFIG_TMPFS_XATTR`
   （5.10 两者都是 y），导致 logind 无法给 `/dev/dri/*` 应用会话 ACL，
   Mutter 通过 logind 获取 DRM master 失败，Wayland 回退 X11。
-- 手动把 `<user>`/GDM 用户加入 `video,render` 组后，`eglinfo` 能
+- 手动把普通用户/GDM 用户加入 `video,render` 组后，`eglinfo` 能
   看到 radeonsi，但 GDM 仍回退；因此按内核配置修复，正在重建。
 
 **桌面状态**
