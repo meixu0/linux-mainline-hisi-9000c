@@ -463,8 +463,8 @@ dss-probe: aod vote after  = 0x15        # bit0 AP media1, bit2 AP vivobus, bit4
 
 ## 建议的后续路线（2026-11-24 更新）
 
-1. **PCIe1（x1 插槽）/ AMD 亮机卡**：先补 PMIC LDO16（`pcieSwitch`）电源，
-   再确认卡的 BAR 能否放进 59 MB 窗口；详见 `pci_amdgpu_zh.md`。
+1. ~~**PCIe1（x1 插槽）/ AMD 亮机卡**：先补 PMIC LDO16（`pcieSwitch`）电源~~（已推翻：PCIe1 已打通，见 `pcie1_ffa_bar_zh.md`；~~剩余问题是 GPU 侧 gfx ring test~~ 也已解决：radeon 下 5 个 ring + 5 个 IB 测试全部通过、显示可读。amdgpu 迁移也已完成：X11 GNOME 桌面可用，详见 `amdgpu_bringup_zh.md`），
+   卡的 BAR 通过“总线侧 0x90000000 + 低 4 GiB 56 MiB 窗口”解决。
 2. 显示若要继续：先做 **5.10 vs 6.18 的 CRG 全量 diff**（5.10 有参考值，6.18 可读 `0xE8D01000`），
    确定哪些门控被关；再研究 LPM3 邮箱上电协议（或找到等效的 AOD 触发方式）。
 3. 最后才是 DPU + HDMI PHY 驱动（可直接复用厂商寄存器序列，但工作量最大）。

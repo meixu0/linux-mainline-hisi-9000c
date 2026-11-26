@@ -2,6 +2,20 @@
 
 日期：2026-11-24
 
+> **2026-11-25 更新（已解决）**：PCIe1 已打通，radeon 下 **5 个 ring +
+> 5 个 IB 测试全部通过**，显示输出正常（屏幕上文字可读）。根因有三个：
+> BAR0 地址未真实路由、VRAM 用 Normal-NC 映射、GTT 系统内存被缓存。
+> 完整分析与复现见 [`pcie1_ffa_bar_zh.md`](pcie1_ffa_bar_zh.md)。
+> 本文第 10、11 节的部分结论（"电源域没起来"、"BAR 放不下"）已被推翻。
+>
+> 排查与修复参考了
+> [`mariobalanica/arm-pcie-gpu-patches`](https://github.com/mariobalanica/arm-pcie-gpu-patches)，
+> 其中 0001/0002/0003 分别对应“Device 映射 + 对齐修复 + sysmem 强制 WC”。
+>
+> **2026-11-26 更新（已完成）**：同样的修正已迁移到 amdgpu，X11 GNOME
+> 桌面可用（amdgpu DDX + glamor/radeonsi + DRI3）。剩余现象、补丁编号
+> 和证据边界见 [`amdgpu_bringup_zh.md`](amdgpu_bringup_zh.md)。
+
 ## 1. 5.10 上的 PCIe 现状（实测）
 
 - 两个 kport 控制器：
@@ -157,9 +171,9 @@ charlotte-pcie f8000000.pcie: host ready, link=1
 
 对比 5.10（链路正常）和 6.18（链路死活不通）的 CRG `0xee262300`：
 
-| | PCIECTRL0 |
-|---|---|
-| 5.10 运行态 | `0x0FCE0400` |
+|           | PCIECTRL0    |
+| --------- | ------------ |
+| 5.10 运行态  | `0x0FCE0400` |
 | 6.18（修复前） | `0x0FCE0C00` |
 
 只差 **bit11 = `PCIEIO_OE_EN_HARD_BYPASS`**。
@@ -194,11 +208,15 @@ charlotte-pcie f8000000.pcie: host ready, link=1
 - 用户态固件：sdd2 的 `/lib/firmware/amdgpu`（699 个文件）和 mesa
   `radeonsi_dri.so` 都已具备，不需要额外安装。
 
-## 10. PCIe1（x1 插槽）参考
+## 10. PCIe1（x1 插槽）早期分析
 
-结论：**厂商 5.10 的 PCIe1 实现和现在跑的 5.10 厂商内核是同一套**，
-配置项逐项一致（`PCIE_KPORT=y/JUN/PC/KPHY/DBI_SPLT` 等），
-没有额外的“桌面版私有实现”。真正有参考价值的是它的 **电源**：
+（2026-11-25 更新：本节当时把 DBI 读失败归因于电源域，实际原因是安全
+世界没有放行该 RC 的地址块，见 [`pcie1_ffa_bar_zh.md`](pcie1_ffa_bar_zh.md)。
+下面关于 PMIC 供电的部分仍然有效。）
+
+厂商 5.10 内核里 PCIe1 的实现就是板端那一套（`PCIE_KPORT` + `pcie-jun`
++ kphy + FF-A），没有“桌面版私有实现”。当时真正看不出来的是**安全世界
+的放行**。另一个有参考价值的是它的 **电源**：
 
 5.10 设备树里：
 
@@ -217,19 +235,25 @@ power_misc {
 - 5.10 运行态两个都是 `enabled`（厂商 `pcie_power.c` 启动时
   `regulator_set_voltage + regulator_enable`）。
 
-6.18 没有 PMIC/power_misc 驱动，也没有 GPIO 驱动；PCIe1 在冷启动时
-读 DBI 直接 SError（`edc00000`），说明它的电源域没起来。
-因此 **PCIe1 目前在 DTS 里是 `status = "disabled"`**，
-等有 AMD 卡可测时再做：
+6.18 没有 PMIC/power_misc 驱动，但 LDO16 由 PMIC 保持在上电状态，
+重启不会关断，所以 PCIe1 的供电不是阻塞点。冷启动读 DBI 直接 SError
+（`edc00000`）的真实原因是**安全世界仍持有该 RC 的地址块**，需要内核
+通过 FF-A 请求 `SET_MEM_UNSEC` 才会放开。
 
-1. 在 6.18 里补一个最小的 PMIC LDO16 使能（或 UEFI 保持 LDO16 常开）；
-2. 使能 PCIe1 节点，验证空槽时 `link down` 不崩；
-3. 插卡后先 5.10 `lspci -vv` 看 BAR（x1 窗口只有 59MB，普通亮机卡
-   VRAM BAR 256MB 放不下，这一点仍然要先确认）。
+窗口大小是另一个独立问题：固件给 pcie1 的低位窗口只有 59 MiB，而
+亮机卡的 BAR0 一般是 256 MiB。早期以为 `0x10_0000_0000` 这一段高位
+窗口可用，后来证明**该段并未真正路由到 PCIe1**（关掉 GPU 的 MEM 解码
+后仍能读回写入值），已改用“总线侧 `0x90000000` + 低 4 GiB 56 MiB
+窗口”。细节见 [`pcie1_ffa_bar_zh.md`](pcie1_ffa_bar_zh.md)。
 
-## 11. 当前结论
+## 11. 当前结论（2026-11-25 更新）
 
-- **6.18 的 PCIe 链路已经打通**（板载 SATA 作为验收目标）。
-- **amdgpu 已经编进 6.18**，只差一张卡和 PCIe1 的电源。
-- 下一步的阻塞点是 **PCIe1 的 LDO16（pcieSwitch）电源** 和
-  **AMD 卡的 BAR 大小**，两者都需要插卡后现场验证。
+- 6.18 的 **PCIe0**（板载 SATA）和 **PCIe1**（x1 插槽）链路都已打通。
+- PCIe1 需要 FF-A `SET_MEM_UNSEC` 放行；256 MiB 的 BAR0 放在总线侧
+  `0x90000000`，由低 4 GiB 的 56 MiB 窗口（`0xea200000` 起）映射。
+- **radeon 下已完全打通**：5 个 ring + 5 个 IB 测试全部通过，fbdev
+  输出正常、屏幕文字可读。
+- 曾经卡住的 gfx ring test 已定位为三个原因：BAR 地址未真实路由、
+  VRAM 使用 Normal-NC 映射、GTT 系统内存被缓存。三者缺一不可。
+- 剩余工作：把这三处修正迁移到 amdgpu。详见
+  [`pcie1_ffa_bar_zh.md`](pcie1_ffa_bar_zh.md) 第 3、6 节。

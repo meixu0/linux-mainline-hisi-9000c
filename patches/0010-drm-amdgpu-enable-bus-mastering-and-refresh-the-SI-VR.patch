@@ -1,0 +1,68 @@
+From 6301918b83aaaa67ca8afe5fab7eab9ab4a0b265 Mon Sep 17 00:00:00 2001
+From: hisi-9000c buildbot <buildbot@localhost>
+Date: Wed, 25 Nov 2026 01:05:00 +0800
+Subject: [PATCH] drm/amdgpu: enable bus mastering and refresh the SI VRAM aperture
+
+ Work in progress for the Kirin 9000C board.  Nothing on this platform
+ enables bus mastering for the dGPU before the driver probes it (the
+ firmware never posts the card), and the rings live in GART memory, so
+ enable it in probe.
+
+ Also write MC_VM_FB_LOCATION and the HDP_NONSURFACE_* registers after
+ the AGP aperture, the same values radeon's si_mc_program() uses.  The
+ VBIOS moves the VRAM aperture when the ASIC is re-posted and gmc_v6_0
+ does not restore the host-visible window, which is a known cause of
+ "ring gfx test failed (-110)" on SI.
+
+ Neither change fixes the gfx ring test on this board yet; both are kept
+ because they are needed for a correct bring-up and are being used to
+ narrow down the remaining failure (the CP is started but never executes
+ a packet, see docs/pcie1_ffa_bar_zh.md).
+
+---
+drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c |    7 +++++++
+ drivers/gpu/drm/amd/amdgpu/gmc_v6_0.c   |   13 +++++++++++++
+ 2 files changed, 20 insertions(+)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c
+index 7333e19..096af92 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c
+@@ -2418,6 +2418,13 @@ static int amdgpu_pci_probe(struct pci_dev *pdev,
+ 	if (ret)
+ 		return ret;
+
++	/*
++	 * Nothing on this platform enables bus mastering for the GPU before
++	 * the driver probes it, and the rings live in GART memory, so the CP
++	 * cannot fetch anything until this is set.
++	 */
++	pci_set_master(pdev);
++
+ 	pci_set_drvdata(pdev, ddev);
+
+ 	amdgpu_init_debug_options(adev);
+diff --git a/drivers/gpu/drm/amd/amdgpu/gmc_v6_0.c b/drivers/gpu/drm/amd/amdgpu/gmc_v6_0.c
+index f6ad791..5d12b47 100644
+--- a/drivers/gpu/drm/amd/amdgpu/gmc_v6_0.c
++++ b/drivers/gpu/drm/amd/amdgpu/gmc_v6_0.c
+@@ -263,6 +263,19 @@ static void gmc_v6_0_mc_program(struct amdgpu_device *adev)
+ 	WREG32(mmMC_VM_AGP_TOP, adev->gmc.agp_end >> 22);
+ 	WREG32(mmMC_VM_AGP_BOT, adev->gmc.agp_start >> 22);
+
++	/*
++	 * The VBIOS moves the VRAM aperture when the ASIC is (re)posted, and
++	 * the host-visible "nonsurface" window has to follow it, otherwise
++	 * CPU writes through the VRAM BAR do not land where the GPU reads
++	 * its rings and GART from.  Same values as radeon's si_mc_program().
++	 */
++	WREG32(mmMC_VM_FB_LOCATION,
++	       (adev->gmc.vram_start >> 24) |
++	       (((adev->gmc.vram_end >> 24) & 0xffff) << 16));
++	WREG32(mmHDP_NONSURFACE_BASE, adev->gmc.vram_start >> 8);
++	WREG32(mmHDP_NONSURFACE_INFO, (2 << 7) | (1 << 30));
++	WREG32(mmHDP_NONSURFACE_SIZE, 0x3FFFFFFF);
++
+ 	if (gmc_v6_0_wait_for_idle(ip_block))
+ 		dev_warn(adev->dev, "Wait for MC idle timedout !\n");
+ }

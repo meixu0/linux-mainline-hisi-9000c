@@ -25,16 +25,17 @@ Linux 6.18 主线移植：构建脚本、补丁、内核配置、设备树和工
 
 ### 功能状态
 
-| 功能 | 5.10 厂商内核 | 6.18 主线 |
-|---|---|---|
-| 8c12t SMP 启动（8 核 12 线程） | 是 | 是 |
-| 串口控制台（`uart_v500`） | 是 | 是 |
-| UFS（3 个 LUN，43 个分区） | 是 | 是，HS-G4 / 2 lanes（读约 931 MB/s） |
-| PCIe0（板载 ASM1064 SATA） | 是 | 是，Gen3 x1 + `ahci` |
-| PCIe1（外部 x1 插槽） | 是 | 驱动就绪，待插槽电源使能后打开 |
-| amdgpu | 未编入 | 已编入，需要插卡 |
-| 显示（厂商 DPU/HDMI） | 是 | 尚未（只有厂商 `dkmd`） |
-| initramfs 进入 rootfs chroot | — | 是（`sdd2-chroot`，默认只读） |
+| 功能                         | 5.10 厂商内核 | 6.18 主线                                                                                                                     |
+| -------------------------- | --------- | --------------------------------------------------------------------------------------------------------------------------- |
+| 8c12t SMP 启动（8 核 12 线程）    | 是         | 是                                                                                                                           |
+| 串口控制台（`uart_v500`）         | 是         | 是                                                                                                                           |
+| UFS（3 个 LUN，43 个分区）        | 是         | 是，HS-G4 / 2 lanes（读约 931 MB/s）                                                                                              |
+| PCIe0（板载 ASM1064 SATA）     | 是         | 是，Gen3 x1 + `ahci`                                                                                                          |
+| PCIe1（外部 x1 插槽）            | 是         | 是，Gen3 x1；需 FF-A `SET_MEM_UNSEC`，BAR0 在总线侧 `0x90000000`、经低 4 GiB 的 56 MiB 窗口映射                                              |
+| Radeon 显卡（Oland）           | —         | **是**：5 个 ring + 5 个 IB 测试全部通过，fbdev 输出正常、屏幕文字可读                                                                            |
+| amdgpu                     | 未编入       | **桌面可用**：GMC/GART、UVD、fb0、DVI-I-1 控制台输出正常；56 MiB visible 检查和用户态 VRAM→GTT 策略已加入；X11 GNOME 桌面在 amdgpu DDX + glamor/radeonsi + DRI3 下正常运行，`glxinfo` 报告 `direct rendering: Yes`、GL 4.6 / GLES 3.2；555 秒停顿在第 3 轮未复现 |
+| 显示（厂商 DPU/HDMI）            | 是         | 尚未（只有厂商 `dkmd`）                                                                                                             |
+| initramfs 进入 rootfs chroot | —         | 是（`sdd2-chroot`，默认只读）                                                                                                       |
 
 ### 补丁来源
 
@@ -43,7 +44,12 @@ Linux 6.18 主线移植：构建脚本、补丁、内核配置、设备树和工
 - 板子运行时的厂商设备树（`dtc -I fs -O dts /proc/device-tree`）；
 - 华为手机内核源码包（`HBN-AL00,HBN-AL10,HBN-AL80`），重点是
   `platform_source/basicplatform/drivers/{pci,clk,gpio}` 和
-  `drivers/video/fbdev/dkmd`。
+  `drivers/video/fbdev/dkmd`；
+- [`mariobalanica/arm-pcie-gpu-patches`](https://github.com/mariobalanica/arm-pcie-gpu-patches)：
+  arm64 外接 GPU 的内核补丁集。本板 PCIe1 的三个根因（MMIO 必须 Device
+  映射、需要对齐修复、GTT 系统内存需强制 WC）与该项目的
+  0001/0002/0003 一一对应，详见
+  [pcie1_ffa_bar_zh.md](pcie1_ffa_bar_zh.md) 第 5 节。
 
 **不要**参考 `hi3660`/`hi3670`：Kirin 9000C 的 UFS/PCIe/时钟模块与它们不同。
 
@@ -54,6 +60,14 @@ Linux 6.18 主线移植：构建脚本、补丁、内核配置、设备树和工
 - `0005`：加入 `ufshcd-charlotte` 变体驱动
 - `0006`：通过私有 UniPro 窗口协商 HS-G4
 - `0007`：加入 DesignWare PCIe host glue（`pcie-charlotte`）
+- `0008`：给 PCIe1 加 64 位 BAR 窗口与入向 `dma-ranges`
+- `0009`：通过 platdrv FF-A 安全分区放行 PCIe1
+- `0010`：amdgpu Bus Master + SI VRAM 窗口重编
+- `0011`：报告 56 MiB 重定位 aperture，并强制 GTT 使用 WC
+- `0012`：用户态 VRAM BO 在 mmap/fault 时迁移到 GTT
+- `0013`：补上 SI 的 PASID TLB flush 回调
+- `0014`：reset magic 和 UVD 消息缓冲区改用 I/O 访问器
+- 实测与证据见 [amdgpu_bringup_zh.md](amdgpu_bringup_zh.md)
 
 ### 工具
 
@@ -85,6 +99,15 @@ GRUB 条目名为 `Linux 6.18 charlotte bring-up (TEST - uart console)`，
 - 构建指南（板端 Ubuntu/Debian）：[English](build_guide_ubuntu_en.md) | [中文](build_guide_ubuntu_zh.md)
 - UFS 移植笔记：[中文](ufs_bringup_zh.md)
 - PCIe / amdgpu 笔记：[中文](pci_amdgpu_zh.md)
+- PCIe1 / FF-A / 64 位窗口：[中文](pcie1_ffa_bar_zh.md)
+- amdgpu 迁移记录：[中文](amdgpu_bringup_zh.md)
+- 当前可用桌面：radeon + LightDM，DVI-I-1 @1680x1050；
+  amdgpu 也已在同一分辨率下进入 X11 GNOME 桌面，amdgpu DDX +
+  glamor/radeonsi + DRI3，`glxinfo` 显示硬件加速（GL 4.6 /
+  GLES 3.2）。用户态 VRAM→GTT 策略让 SError 消失；第 2 轮出现的
+  约 555 秒 Xorg 停顿在第 3 轮未复现。诊断服务已修正（不再读取
+  1 GiB 的 `amdgpu_vram` debugfs）并暂时禁用。详见
+  [amdgpu_bringup_zh.md](amdgpu_bringup_zh.md) 第 8 节
 - USB 网卡 / 网络笔记：[中文](net_bringup_zh.md)
 - 显示移植计划：[中文](display_bringup_zh.md)
 - 补丁集与 rootfs chroot：[中文](rootfs_chroot_zh.md)

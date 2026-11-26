@@ -1,0 +1,124 @@
+From 33e8e843484bda717a80a8eb7cc713d369cde1ec Mon Sep 17 00:00:00 2001
+From: hisi-9000c buildbot <buildbot@localhost>
+Date: Thu, 26 Nov 2026 14:30:00 +0800
+Subject: [PATCH 4/4] drm/amdgpu: use I/O accessors for SI reset magic and UVD
+ messages
+
+The GART table and the UVD message buffers are pinned in VRAM, which
+this board only tolerates with 8-byte accesses.  arm64 lowers a plain
+memcpy()/memset() into 16-byte ldp/stp sequences, which abort with an
+SError over the PCIe BAR.  Use memcpy_fromio()/memset_io() and 32-bit
+writel() for these buffers.
+---
+ drivers/gpu/drm/amd/amdgpu/amdgpu_device.c | 14 +++++--
+ drivers/gpu/drm/amd/amdgpu/amdgpu_uvd.c    | 44 +++++++++++-----------
+ 2 files changed, 34 insertions(+), 24 deletions(-)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_device.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_device.c
+index 96b6738..7b3f041 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_device.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_device.c
+@@ -3310,7 +3310,12 @@ init_failed:
+  */
+ static void amdgpu_device_fill_reset_magic(struct amdgpu_device *adev)
+ {
+-	memcpy(adev->reset_magic, adev->gart.ptr, AMDGPU_RESET_MAGIC_NUM);
++	/*
++	 * gart.ptr points at the GART table in VRAM.  Plain memcpy() is
++	 * lowered to 16-byte ldp/stp sequences on arm64, which this board
++	 * rejects over PCIe; memcpy_fromio() uses at most 8-byte accesses.
++	 */
++	memcpy_fromio(adev->reset_magic, adev->gart.ptr, AMDGPU_RESET_MAGIC_NUM);
+ }
+ 
+ /**
+@@ -3325,8 +3330,11 @@ static void amdgpu_device_fill_reset_magic(struct amdgpu_device *adev)
+  */
+ static bool amdgpu_device_check_vram_lost(struct amdgpu_device *adev)
+ {
+-	if (memcmp(adev->gart.ptr, adev->reset_magic,
+-			AMDGPU_RESET_MAGIC_NUM))
++	u8 magic[AMDGPU_RESET_MAGIC_NUM];
++
++	/* Do not let the compiler emit >8-byte accesses to VRAM. */
++	memcpy_fromio(magic, adev->gart.ptr, sizeof(magic));
++	if (memcmp(magic, adev->reset_magic, sizeof(magic)))
+ 		return true;
+ 
+ 	if (!amdgpu_in_reset(adev))
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_uvd.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_uvd.c
+index 5c38f0d..e7393fd 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_uvd.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_uvd.c
+@@ -1204,23 +1204,25 @@ int amdgpu_uvd_get_create_msg(struct amdgpu_ring *ring, uint32_t handle,
+ 	struct amdgpu_device *adev = ring->adev;
+ 	struct amdgpu_bo *bo = adev->uvd.ib_bo;
+ 	uint32_t *msg;
+-	int i;
+ 
+ 	msg = amdgpu_bo_kptr(bo);
++	/*
++	 * On UVD 3.x this BO is pinned in VRAM.  Use I/O accessors so the
++	 * compiler cannot turn the zero fill into a wide memset()/stp write.
++	 */
++	memset_io(msg, 0, 1024 * sizeof(*msg));
+ 	/* stitch together an UVD create msg */
+-	msg[0] = cpu_to_le32(0x00000de4);
+-	msg[1] = cpu_to_le32(0x00000000);
+-	msg[2] = cpu_to_le32(handle);
+-	msg[3] = cpu_to_le32(0x00000000);
+-	msg[4] = cpu_to_le32(0x00000000);
+-	msg[5] = cpu_to_le32(0x00000000);
+-	msg[6] = cpu_to_le32(0x00000000);
+-	msg[7] = cpu_to_le32(0x00000780);
+-	msg[8] = cpu_to_le32(0x00000440);
+-	msg[9] = cpu_to_le32(0x00000000);
+-	msg[10] = cpu_to_le32(0x01b37000);
+-	for (i = 11; i < 1024; ++i)
+-		msg[i] = cpu_to_le32(0x0);
++	writel(0x00000de4, (void __iomem *)&msg[0]);
++	writel(0x00000000, (void __iomem *)&msg[1]);
++	writel(handle, (void __iomem *)&msg[2]);
++	writel(0x00000000, (void __iomem *)&msg[3]);
++	writel(0x00000000, (void __iomem *)&msg[4]);
++	writel(0x00000000, (void __iomem *)&msg[5]);
++	writel(0x00000000, (void __iomem *)&msg[6]);
++	writel(0x00000780, (void __iomem *)&msg[7]);
++	writel(0x00000440, (void __iomem *)&msg[8]);
++	writel(0x00000000, (void __iomem *)&msg[9]);
++	writel(0x01b37000, (void __iomem *)&msg[10]);
+ 
+ 	return amdgpu_uvd_send_msg(ring, bo, true, fence);
+ 
+@@ -1232,7 +1234,7 @@ int amdgpu_uvd_get_destroy_msg(struct amdgpu_ring *ring, uint32_t handle,
+ 	struct amdgpu_device *adev = ring->adev;
+ 	struct amdgpu_bo *bo = NULL;
+ 	uint32_t *msg;
+-	int r, i;
++	int r;
+ 
+ 	if (direct) {
+ 		bo = adev->uvd.ib_bo;
+@@ -1243,13 +1245,13 @@ int amdgpu_uvd_get_destroy_msg(struct amdgpu_ring *ring, uint32_t handle,
+ 	}
+ 
+ 	msg = amdgpu_bo_kptr(bo);
++	/* VRAM on UVD 3.x: avoid compiler-generated wide writes */
++	memset_io(msg, 0, 1024 * sizeof(*msg));
+ 	/* stitch together an UVD destroy msg */
+-	msg[0] = cpu_to_le32(0x00000de4);
+-	msg[1] = cpu_to_le32(0x00000002);
+-	msg[2] = cpu_to_le32(handle);
+-	msg[3] = cpu_to_le32(0x00000000);
+-	for (i = 4; i < 1024; ++i)
+-		msg[i] = cpu_to_le32(0x0);
++	writel(0x00000de4, (void __iomem *)&msg[0]);
++	writel(0x00000002, (void __iomem *)&msg[1]);
++	writel(handle, (void __iomem *)&msg[2]);
++	writel(0x00000000, (void __iomem *)&msg[3]);
+ 
+ 	r = amdgpu_uvd_send_msg(ring, bo, direct, fence);
+ 
+-- 
+2.50.1 (Apple Git-155)
+

@@ -1,0 +1,64 @@
+From c3bcfebe024cf82a3d4d8997059f859265c19986 Mon Sep 17 00:00:00 2001
+From: hisi-9000c buildbot <buildbot@localhost>
+Date: Thu, 26 Nov 2026 14:00:00 +0800
+Subject: [PATCH 1/4] drm/amdgpu: report the 56 MiB charlotte aperture and
+ force GTT WC
+
+The GPU's BAR0 is relocated to bus 0x90000000 and the SoC only
+routes 56 MiB of it at CPU 0xea200000.  Report that window instead of
+the unrouted 256 MiB resource, otherwise the memory manager places BOs
+where the CPU cannot reach them.
+
+The board's PCIe path is also not cache-coherent with the CPU.  GTT
+objects are fetched by the GPU without snooping, so cached mappings
+leave stale data in DRAM and the CP never sees the ring.  Force
+write-combined mappings for this ASIC.
+---
+ drivers/gpu/drm/amd/amdgpu/amdgpu_ttm.c |  8 ++++++++
+ drivers/gpu/drm/amd/amdgpu/gmc_v6_0.c   | 11 +++++++++++
+ 2 files changed, 19 insertions(+)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_ttm.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_ttm.c
+index 9d568c1..2633cf2 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_ttm.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_ttm.c
+@@ -1135,6 +1135,14 @@ static struct ttm_tt *amdgpu_ttm_tt_create(struct ttm_buffer_object *bo,
+ 		caching = ttm_write_combined;
+ 	else
+ 		caching = ttm_cached;
++	/*
++	 * Board quirk: this SoC's PCIe is not cache-coherent with the CPU.
++	 * GTT objects are fetched by the GPU without snooping, so cached
++	 * mappings would leave stale data behind.
++	 */
++	if (adev->pdev->vendor == 0x1002 && adev->pdev->device == 0x6611 &&
++	    caching == ttm_cached)
++		caching = ttm_write_combined;
+ 
+ 	/* allocate space for the uninitialized page entries */
+ 	if (ttm_sg_tt_init(&gtt->ttm, bo, page_flags, caching)) {
+diff --git a/drivers/gpu/drm/amd/amdgpu/gmc_v6_0.c b/drivers/gpu/drm/amd/amdgpu/gmc_v6_0.c
+index 5d12b47..ed465d5 100644
+--- a/drivers/gpu/drm/amd/amdgpu/gmc_v6_0.c
++++ b/drivers/gpu/drm/amd/amdgpu/gmc_v6_0.c
+@@ -339,6 +339,17 @@ static int gmc_v6_0_mc_init(struct amdgpu_device *adev)
+ 	adev->gmc.aper_base = pci_resource_start(adev->pdev, 0);
+ 	adev->gmc.aper_size = pci_resource_len(adev->pdev, 0);
+ 	adev->gmc.visible_vram_size = adev->gmc.aper_size;
++	/*
++	 * Board quirk: the PCI resource still describes the unrouted
++	 * 0x1000000000 window.  This card's BAR0 is relocated to bus
++	 * 0x90000000 and reached through the low 56 MiB window at
++	 * 0xea200000, so report that to the memory manager.
++	 */
++	if (adev->pdev->vendor == 0x1002 && adev->pdev->device == 0x6611) {
++		adev->gmc.aper_base = 0xea200000;
++		adev->gmc.aper_size = 0x03800000;
++		adev->gmc.visible_vram_size = adev->gmc.aper_size;
++	}
+ 
+ 	/* set the gart size */
+ 	if (amdgpu_gart_size == -1) {
+-- 
+2.50.1 (Apple Git-155)
+

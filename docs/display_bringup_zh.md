@@ -138,7 +138,7 @@ platform_source/basicplatform/drivers/regulator/ip_regulator.c  # AOD 投票/上
 - `/dev/fbex_cmd` 属于**文件加密**子系统（File-Based Encryption eXtension），与显示无关
 - `/sys/kernel/debug/dri/0/state` 里 3 个 `DPU-CRTC` 全是 `enable=0`、连接器未接
   → 厂商 DRM 驱动走的是**自定义（非 atomic）路径**，标准 atomic state 不可信
-- 内核命令行：`GFXMODE=0,1920x1080`
+- 内核命令行里带厂商的图形模式变量（`GFXMODE=0,1920x1080`）
 - 相关中断：`dp_gpio_hpd` (gpio 18)、`hdmi_bridge` (`ff806000.gpio` 6)
 
 ### 7.2 危险窗口（会触发 NOC 复位）

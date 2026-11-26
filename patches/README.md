@@ -12,6 +12,30 @@ Baseline: upstream `v6.18`. Apply in order with `git am`.
 | 0005 | ufs: host: add ufshcd-charlotte variant driver | UFS host |
 | 0006 | ufs: charlotte: negotiate HS-G4 through the private UniPro window | UFS speed |
 | 0007 | pci: dwc: add charlotte PCIe host support | PCIe |
+| 0008 | arm64: dts: charlotte: enable PCIe1 with a 64-bit BAR window | DTS |
+| 0009 | pci: dwc: charlotte: release PCIe1 through the platdrv FF-A partition | PCIe |
+| 0010 | drm/amdgpu: enable bus mastering and refresh the SI VRAM aperture | GPU |
+| 0011 | drm/amdgpu: report the 56 MiB charlotte aperture and force GTT WC | GPU |
+| 0012 | drm/amdgpu: keep charlotte user-space VRAM mappings in GTT | GPU |
+| 0013 | drm/amdgpu: add the SI PASID TLB flush callback | GPU |
+| 0014 | drm/amdgpu: use I/O accessors for SI reset magic and UVD messages | GPU |
+
+## Status
+
+0001-0014 are functional.  PCIe1 (the external x1 slot) trains, enumerates
+and gives the card a 256 MiB BAR0; on this board BAR0 is relocated to bus
+`0x90000000` and the CPU reaches 56 MiB of it through the low window at
+`0xea200000`.  0009 also programs the inbound iATU windows for device DMA
+(do **not** use `dma-ranges` for this board, see the doc).
+
+amdgpu brings up VBIOS, VRAM, GART, DPM and the display connectors, and
+reaches an X11 GNOME desktop with amdgpu DDX + glamor/radeonsi + DRI3
+(hardware acceleration, GL 4.6 / GLES 3.2 at 1680x1050).  The SI VRAM
+window, GTT cache policy, user-space GTT policy, PASID TLB flush and
+8-byte-safe VRAM accessors are patches 0010-0014.  See
+`docs/amdgpu_bringup_zh.md` for the evidence and the remaining
+observations.
+
 
 ## Apply
 
@@ -22,7 +46,7 @@ git am /path/to/patches/*.patch
 ```
 
 The series has been verified with `git am` on a clean `v6.18` checkout: all
-seven commits replay without conflicts.
+fourteen commits replay without conflicts.
 
 ## Notes
 

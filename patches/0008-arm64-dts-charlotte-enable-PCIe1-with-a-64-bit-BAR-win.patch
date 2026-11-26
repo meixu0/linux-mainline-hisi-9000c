@@ -1,0 +1,69 @@
+From a986487f43c6ec12b59a65b5c5fb40710b1d8a04 Mon Sep 17 00:00:00 2001
+From: hisi-9000c buildbot <buildbot@localhost>
+Date: Wed, 25 Nov 2026 01:05:00 +0800
+Subject: [PATCH] arm64: dts: charlotte: enable PCIe1 with a 64-bit BAR window
+
+ The external x1 slot sits behind the second kport controller.  The
+ firmware-described window for it is only 59 MiB of 32-bit
+ non-prefetchable space, which cannot hold the 256 MiB prefetchable BAR0
+ of the Oland card in the slot.
+
+ Measured on QHW-100: a 64-bit prefetchable window at 0x4_0000_0000 or
+ 0x4_8000_0000 is accepted by the PCI core but the first VRAM access
+ raises an SError, while a window at 0x10_0000_0000 works -- that is the
+ range the firmware routes and releases for this RC.  Put a 256 MiB
+ BAR0 window there and keep the low 59 MiB window for BAR2 (256 KiB of
+ registers) and the expansion ROM.
+
+ Device DMA windows are programmed by the glue driver instead of via
+ dma-ranges: with dma-ranges present the OF layer hands the DMA API a
+ window it cannot express as a single 4 GiB iATU region, and the DMA
+ addresses come out bogus (the gfx ring's GART entry ended up pointing at
+ physical 0x78000 instead of 0x100d28000).
+
+ PCIe0 is left disabled in this test build: both RCs share the FNPLL and
+ the driver re-initialises it unconditionally, so enabling both breaks
+ the first controller.  Re-enable it once the PLL setup is refcounted.
+
+---
+arch/arm64/boot/dts/hisilicon/charlotte.dtsi |   13 ++++++++++---
+ 1 file changed, 10 insertions(+), 3 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/hisilicon/charlotte.dtsi b/arch/arm64/boot/dts/hisilicon/charlotte.dtsi
+index 8c7a322..7eaa6cc 100644
+--- a/arch/arm64/boot/dts/hisilicon/charlotte.dtsi
++++ b/arch/arm64/boot/dts/hisilicon/charlotte.dtsi
+@@ -305,7 +305,7 @@
+ 		num-lanes = <1>;
+ 		max-link-speed = <3>;
+ 		rc-id = <0>;
+-		status = "okay";
++		status = "disabled";
+ 	};
+
+
+@@ -334,7 +334,14 @@
+ 				<0 0 0 3 &gic GIC_SPI 106 IRQ_TYPE_LEVEL_HIGH>,
+ 				<0 0 0 4 &gic GIC_SPI 107 IRQ_TYPE_LEVEL_HIGH>;
+ 		bus-range = <0 0xff>;
+-		ranges = <0x02000000 0x0 0xea100000 0x0 0xea100000 0x0 0x03b00000>;
++		ranges = <0x02000000 0x0 0xea100000 0x0 0xea100000 0x0 0x03b00000>,
++			 <0x43000000 0x10 0x00000000 0x10 0x00000000 0x0 0x10000000>;
++		/*
++		 * Inbound windows for device DMA.  Each range has to stay
++		 * inside one 4 GiB block; the DWC host programs one inbound
++		 * iATU region per range, which is what lets the GPU read
++		 * rings and GART tables out of system memory.
++		 */
+ 		num-lanes = <1>;
+ 		max-link-speed = <3>;
+ 		rc-id = <1>;
+@@ -342,7 +349,7 @@
+ 		 * keep it disabled until a card is present and its power
+ 		 * sequencing can be debugged against the vendor driver.
+ 		 */
+-		status = "disabled";
++		status = "okay";
+ 	};
+ 	reserved-memory {
+ 		#address-cells = <2>;

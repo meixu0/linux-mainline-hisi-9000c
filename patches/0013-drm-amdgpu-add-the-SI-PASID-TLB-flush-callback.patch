@@ -1,0 +1,53 @@
+From caa7ff63594b26470875f821072266b58f7d40d6 Mon Sep 17 00:00:00 2001
+From: hisi-9000c buildbot <buildbot@localhost>
+Date: Thu, 26 Nov 2026 14:20:00 +0800
+Subject: [PATCH 3/4] drm/amdgpu: add the SI PASID TLB flush callback
+
+The common VM code calls flush_gpu_tlb_pasid() for TLB fences.  SI
+has no PASID/ATC support and the callback was NULL, which produced an
+Oops on the first TLB fence.  Invalidate every VMID instead.
+---
+ drivers/gpu/drm/amd/amdgpu/gmc_v6_0.c | 20 ++++++++++++++++++++
+ 1 file changed, 20 insertions(+)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/gmc_v6_0.c b/drivers/gpu/drm/amd/amdgpu/gmc_v6_0.c
+index ed465d5..8ce452a 100644
+--- a/drivers/gpu/drm/amd/amdgpu/gmc_v6_0.c
++++ b/drivers/gpu/drm/amd/amdgpu/gmc_v6_0.c
+@@ -381,6 +381,25 @@ static void gmc_v6_0_flush_gpu_tlb(struct amdgpu_device *adev, uint32_t vmid,
+ 	WREG32(mmVM_INVALIDATE_REQUEST, 1 << vmid);
+ }
+ 
++/**
++ * gmc_v6_0_flush_gpu_tlb_pasid - flush the TLB for a PASID (SI)
++ * @adev: amdgpu_device pointer
++ * @pasid: PASID to flush
++ * @flush_type: type of flush
++ * @all_hub: flush all hubs
++ * @inst: KIQ instance (unused on SI)
++ *
++ * SI has no PASID/ATC support, but the common VM code issues PASID
++ * based flushes for TLB fences.  Invalidate every VMID instead of
++ * leaving the callback NULL.
++ */
++static void gmc_v6_0_flush_gpu_tlb_pasid(struct amdgpu_device *adev,
++					 uint16_t pasid, uint32_t flush_type,
++					 bool all_hub, uint32_t inst)
++{
++	WREG32(mmVM_INVALIDATE_REQUEST, 0xffff);
++}
++
+ static uint64_t gmc_v6_0_emit_flush_gpu_tlb(struct amdgpu_ring *ring,
+ 					    unsigned int vmid, uint64_t pd_addr)
+ {
+@@ -1164,6 +1183,7 @@ static const struct amd_ip_funcs gmc_v6_0_ip_funcs = {
+ 
+ static const struct amdgpu_gmc_funcs gmc_v6_0_gmc_funcs = {
+ 	.flush_gpu_tlb = gmc_v6_0_flush_gpu_tlb,
++	.flush_gpu_tlb_pasid = gmc_v6_0_flush_gpu_tlb_pasid,
+ 	.emit_flush_gpu_tlb = gmc_v6_0_emit_flush_gpu_tlb,
+ 	.set_prt = gmc_v6_0_set_prt,
+ 	.get_vm_pde = gmc_v6_0_get_vm_pde,
+-- 
+2.50.1 (Apple Git-155)
+

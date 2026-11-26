@@ -14,6 +14,7 @@
  * platform_source/basicplatform/drivers/clk/extreme/platform/clk-char-cs.c.
  */
 
+#include <linux/arm-smccc.h>
 #include <linux/delay.h>
 #include <linux/io.h>
 #include <linux/iopoll.h>
@@ -22,6 +23,7 @@
 #include <linux/of_address.h>
 #include <linux/pci.h>
 #include <linux/platform_device.h>
+#include <linux/printk.h>
 
 #include "pcie-designware.h"
 
@@ -53,6 +55,7 @@
 #define CTRL22_CLKREQ_OUT	BIT(0)
 #define CTRL25_TIMEOUT_MASK	(0x3f << 1)
 #define CTRL25_TIMEOUT_VAL	(0x36 << 1)
+#define CTRL1_ELBI_DBI_EN	BIT(21)
 #define CTRL30_DBI_EP_SPLT	BIT(0)
 #define CTRL20_TP_MEM_TRA	BIT(27)
 #define CTRL23_SP_MEM_TRA	BIT(16)
@@ -122,9 +125,13 @@
 #define SCTRL_PCIE_AUX		0x170
 #define SCTRL_PCIE0_AUX_EN	BIT(19)
 #define SCTRL_PCIE1_AUX_EN	BIT(20)
+#define SCTRL_PCIE_ISO_DIS	0x004
+#define SCTRL_PCIE0_ISO		BIT(3)
+#define SCTRL_PCIE1_ISO		BIT(4)
 
 /* ATF SMC IDs (vendor bl31_smc.h, group 0x27) */
 #define FID_PCIE_SET_TBU_BYPASS	0xc3002700
+#define FID_PCIE_GET_VREF_SEL	0xc3002703
 #define FID_PCIE_SET_MEM_UNSEC	0xc3002702
 
 /* PMCTRL (0xffb81000): NoC power idle */
@@ -146,6 +153,8 @@ struct clt_pcie {
 	void __iomem *gpio;
 	u32 rc_id;
 	int perst_gpio;
+	u16 ffa_src_id;
+	u16 ffa_dst_id;
 };
 
 static inline u32 clt_apb_read(struct clt_pcie *c, u32 reg)
@@ -351,6 +360,111 @@ static int clt_noc_exit_idle(struct clt_pcie *c)
 	return -ETIMEDOUT;
 }
 
+/*
+ * The vendor stack reaches the PCIe security services through the "platdrv"
+ * secure partition over Arm FF-A, not through a raw platform SMC (the same
+ * FID sent as a plain SMC is echoed back unhandled).  The mainline FF-A
+ * transport refuses to initialise unless SMCCC 1.2 is advertised, while this
+ * firmware is an FF-A 1.1 SPMC behind SMCCC 1.1, so drive FF-A directly.
+ */
+/* platform SMC: address of the ATF-reserved FF-A RX/TX shared buffer */
+#define CLT_FID_FFA_SHMEM_GET		0xc3002d01
+
+#define FFA_FID_VERSION			0x84000063
+#define FFA_FID_ID_GET			0x84000069
+#define FFA_FID_FEATURES		0x84000064
+#define FFA_FID_RX_RELEASE		0x84000065
+#define FFA_FID_RXTX_MAP		0xc4000066
+#define FFA_FID_RXTX_UNMAP		0x84000067
+#define FFA_FID_PARTITION_INFO_GET	0x84000068
+#define FFA_FID_MSG_SEND_DIRECT_REQ	0x8400006f
+#define FFA_FID_MSG_SEND_DIRECT_RESP	0x84000070
+#define FFA_FID_RUN			0x8400006d
+#define FFA_FID_INTERRUPT		0x84000062
+#define FFA_FID_YIELD			0x8400006c
+#define FFA_FID_ERROR			0x84000060
+#define FFA_FID_SUCCESS			0x84000061
+
+/* platdrv secure partition (UUID f9e75f33-a1ca4f82-98e6c802-0f20ecb4) */
+#define CLT_PLATDRV_ID		0x8004
+
+/*
+ * platdrv is the FF-A secure partition with id 0x8004 on this SoC; the SPMC
+ * does not fill in the UUID in its partition info, so the id is fixed here.
+ * Direct requests do not need the RX/TX buffers, which keeps this path free
+ * of the ATF shared-memory handshake.
+ */
+static void clt_ffa_smc(struct arm_smccc_1_2_regs *a,
+			struct arm_smccc_1_2_regs *r)
+{
+	memset(r, 0, sizeof(*r));
+	arm_smccc_1_2_smc(a, r);
+}
+
+static int clt_ffa_init(struct clt_pcie *c)
+{
+	struct arm_smccc_1_2_regs a = { }, r;
+
+	a.a0 = FFA_FID_VERSION;
+	a.a1 = 0x10001;			/* FF-A 1.1 */
+	clt_ffa_smc(&a, &r);
+	dev_info(c->pci.dev, "FF-A version %#lx\n", r.a0);
+	if ((s32)r.a0 < 0)
+		return -EOPNOTSUPP;
+
+	memset(&a, 0, sizeof(a));
+	a.a0 = FFA_FID_ID_GET;
+	clt_ffa_smc(&a, &r);
+	if (r.a0 != FFA_FID_SUCCESS) {
+		dev_warn(c->pci.dev, "FF-A id get failed: %#lx\n", r.a0);
+		return -EIO;
+	}
+	c->ffa_src_id = r.a2 & 0xffff;
+	c->ffa_dst_id = CLT_PLATDRV_ID;
+	dev_info(c->pci.dev, "FF-A src=%#x dst=%#x\n",
+		 c->ffa_src_id, c->ffa_dst_id);
+	return 0;
+}
+
+static int clt_ffa_call(struct clt_pcie *c, u32 fid)
+{
+	struct arm_smccc_1_2_regs a = { }, r;
+	u32 ids = (c->ffa_src_id << 16) | c->ffa_dst_id;
+	unsigned int i;
+
+	if (!c->ffa_dst_id)
+		return -ENODEV;
+
+	a.a0 = FFA_FID_MSG_SEND_DIRECT_REQ;
+	a.a1 = ids;
+	a.a2 = 0;
+	a.a3 = fid;
+	a.a4 = c->rc_id;
+	dev_info(c->pci.dev, "FFA %#x(rc%u) sending\n", fid, c->rc_id);
+	clt_ffa_smc(&a, &r);
+	for (i = 0; i < 100; i++) {
+		if (r.a0 != FFA_FID_INTERRUPT && r.a0 != FFA_FID_YIELD)
+			break;
+		memset(&a, 0, sizeof(a));
+		a.a0 = FFA_FID_RUN;
+		a.a1 = r.a1;
+		clt_ffa_smc(&a, &r);
+	}
+
+	if (r.a0 == FFA_FID_ERROR) {
+		dev_err(c->pci.dev, "FFA %#x failed: %ld\n", fid, (long)r.a2);
+		return -EIO;
+	}
+	if (r.a0 != FFA_FID_MSG_SEND_DIRECT_RESP) {
+		dev_warn(c->pci.dev, "FFA %#x unexpected %#lx\n", fid, r.a0);
+		return -EINVAL;
+	}
+
+	dev_info(c->pci.dev, "FFA %#x(rc%u) ok: %#lx %#lx %#lx\n",
+		 fid, c->rc_id, r.a3, r.a4, r.a5);
+	return 0;
+}
+
 static int clt_power_on(struct clt_pcie *c)
 {
 	u32 val, assert = c->rc_id ? 0x00c00000 : 0x00000300;
@@ -362,7 +476,12 @@ static int clt_power_on(struct clt_pcie *c)
 	else
 		clt_clk_pcie0_on(c, CLK_PCIE0_PHY | CLK_PCIE0_SYS);
 
-	/* 2. deassert controller reset + async bridge */
+	/* 2. open the isolation cell between the controller and the NoC */
+	writel(c->rc_id ? SCTRL_PCIE1_ISO : SCTRL_PCIE0_ISO,
+	       c->sctrl + SCTRL_PCIE_ISO_DIS);
+	udelay(10);
+
+	/* 3. deassert controller reset + async bridge */
 	writel(assert, c->crg + CRG_PERRSTDIS0);
 	writel(c->rc_id ? RST_PCIE1_ASYNCBRG : RST_PCIE0_ASYNCBRG,
 	       c->crg + CRG_PERRSTDIS0);
@@ -512,13 +631,80 @@ static int clt_power_on(struct clt_pcie *c)
 		val &= ~CTRL30_DBI_EP_SPLT;
 	clt_apb_write(c, APB_CTRL30, val);
 
+	/*
+	 * Route the CPU's DBI accesses through the ELBI slave.  The vendor
+	 * driver does this around every DBI read/write; on this SoC the
+	 * PCIe1 DBI window answers with a NoC external abort (SError) while
+	 * the bit is clear.
+	 */
+	val = clt_apb_read(c, APB_CTRL1);
+	val |= CTRL1_ELBI_DBI_EN;
+	clt_apb_write(c, APB_CTRL1, val);
+	udelay(10);
+
+	/*
+	 * Ask the secure world to release the RC's memory region and route
+	 * its DMA around the TBU before the first DBI access.
+	 */
+	if (c->rc_id) {
+		clt_ffa_call(c, FID_PCIE_GET_VREF_SEL);
+		clt_ffa_call(c, FID_PCIE_SET_MEM_UNSEC);
+		clt_ffa_call(c, FID_PCIE_SET_TBU_BYPASS);
+	}
+
+	dev_info(c->pci.dev,
+		 "state: ctrl0=%#x ctrl1=%#x ctrl30=%#x pciectrl=%#x pm_idle=%#x\n",
+		 clt_apb_read(c, APB_CTRL0), clt_apb_read(c, APB_CTRL1),
+		 clt_apb_read(c, APB_CTRL30),
+		 readl(c->crg + (c->rc_id ? CRG_PCIECTRL1 : CRG_PCIECTRL0)),
+		 readl(c->pmctrl + PMC_NOC_IDLE));
+
 	return 0;
+}
+
+/*
+ * Device DMA needs inbound iATU windows: without one the RC drops every
+ * device -> system-memory request, so rings and page tables that live in
+ * GART memory can never be fetched.  Declaring dma-ranges in the DT is not
+ * an option here -- the OF layer then hands the DMA API a window it cannot
+ * express as a 4 GiB iATU region, and the resulting addresses are bogus --
+ * so program the identity windows directly.  Each one stays inside a single
+ * 4 GiB block, which is what the controller supports.
+ */
+static const struct {
+	u64 start;
+	u64 size;
+} clt_dma_windows[] = {
+	{ 0x0000000000ULL, 0x100000000ULL },	/* 0 - 4 GiB (low DRAM) */
+	{ 0x1000000000ULL, 0x100000000ULL },	/* 4 - 8 GiB */
+	{ 0x2000000000ULL, 0x100000000ULL },	/* 8 - 12 GiB */
+	{ 0x3000000000ULL, 0x100000000ULL },	/* 12 - 16 GiB */
+	{ 0x8000000000ULL, 0x020000000ULL },	/* 32 - 32.5 GiB */
+};
+
+static void clt_prog_dma_windows(struct dw_pcie *pci)
+{
+	int i, ret;
+
+	for (i = 0; i < ARRAY_SIZE(clt_dma_windows); i++) {
+		ret = dw_pcie_prog_inbound_atu(pci, i, PCIE_ATU_TYPE_MEM,
+					       clt_dma_windows[i].start,
+					       clt_dma_windows[i].start,
+					       clt_dma_windows[i].size);
+		if (ret)
+			dev_warn(pci->dev,
+				 "inbound window %d (%#llx+%#llx) failed: %d\n",
+				 i, (unsigned long long)clt_dma_windows[i].start,
+				 (unsigned long long)clt_dma_windows[i].size, ret);
+	}
 }
 
 static int clt_start_link(struct dw_pcie *pci)
 {
 	struct clt_pcie *c = container_of(pci, struct clt_pcie, pci);
 	u32 val = clt_apb_read(c, APB_CTRL7);
+
+	clt_prog_dma_windows(pci);
 
 	val |= PCIE_LTSSM_ENABLE_BIT;
 	clt_apb_write(c, APB_CTRL7, val);
@@ -606,6 +792,12 @@ static int clt_pcie_probe(struct platform_device *pdev)
 	if (of_property_read_u32(dev->of_node, "rc-id", &c->rc_id))
 		c->rc_id = 0;
 
+	if (c->rc_id) {
+		ret = clt_ffa_init(c);
+		if (ret)
+			dev_warn(dev, "platdrv FF-A unavailable: %d\n", ret);
+	}
+
 	dev_info(dev, "PCIe%u power-on\n", c->rc_id);
 	ret = clt_power_on(c);
 	if (ret) {
@@ -614,6 +806,9 @@ static int clt_pcie_probe(struct platform_device *pdev)
 	}
 
 	pci->pp.ops = &clt_host_ops;
+
+	dev_info(dev, "dbi_base=%px smccc=%#x\n", pci->dbi_base,
+		 arm_smccc_get_version());
 
 	dev_info(dev, "DBI id=%#x link=%d\n", dw_pcie_read_dbi(pci, 0, 4),
 		 dw_pcie_link_up(pci));

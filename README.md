@@ -25,18 +25,18 @@ one-shot test entry (`grub-reboot`).
 
 ### Feature status
 
-| Feature | 5.10 vendor | 6.18 mainline |
-|---|---|---|
-| 8c12t SMP boot (8 cores / 12 threads) | yes | yes |
-| UART console (`uart_v500`) | yes | yes |
-| UFS (3 LUNs, 43 partitions) | yes | yes, HS-G4 / 2 lanes (~931 MB/s read) |
-| PCIe0 (onboard ASM1064 SATA) | yes | yes, Gen3 x1 + `ahci` |
-| PCIe1 (external x1 slot) | yes | driver ready, disabled until the slot rail is enabled |
-| USB Ethernet (RTL8153 / `r8152`) | yes | yes, 1000/full, DHCP + IPv6 |
-| amdgpu | not built | built-in, needs a card |
-| Display (vendor DPU/HDMI) | yes | not yet (vendor `dkmd` only) |
-| Rootfs chroot from initramfs | n/a | yes (`sdd2-chroot`, read-only by default) |
-| Network in initramfs | n/a | yes (`net-dhcp`) |
+| Feature                               | 5.10 vendor | 6.18 mainline                                                             |
+| ------------------------------------- | ----------- | ------------------------------------------------------------------------- |
+| 8c12t SMP boot (8 cores / 12 threads) | yes         | yes                                                                       |
+| UART console (`uart_v500`)            | yes         | yes                                                                       |
+| UFS (3 LUNs, 43 partitions)           | yes         | yes, HS-G4 / 2 lanes (~931 MB/s read)                                     |
+| PCIe0 (onboard ASM1064 SATA)          | yes         | yes, Gen3 x1 + `ahci`                                                     |
+| PCIe1 (external x1 slot)              | yes         | yes, Gen3 x1; needs FF-A `SET_MEM_UNSEC`; BAR0 at bus `0x90000000`, 56 MiB CPU window at `0xea200000` |
+| USB Ethernet (RTL8153 / `r8152`)      | yes         | yes, 1000/full, DHCP + IPv6                                               |
+| amdgpu                                | not built   | yes: X11 GNOME desktop, amdgpu DDX + glamor/radeonsi + DRI3, GL 4.6 / GLES 3.2 |
+| Display (vendor DPU/HDMI)             | yes         | not yet (vendor `dkmd` only)                                              |
+| Rootfs chroot from initramfs          | n/a         | yes (`sdd2-chroot`, read-only by default)                                 |
+| Network in initramfs                  | n/a         | yes (`net-dhcp`)                                                          |
 
 ### Patch sources
 
@@ -57,6 +57,13 @@ Kirin 9000C UFS/PCIe/clock blocks are different.
 - `0005`: add the `ufshcd-charlotte` variant driver
 - `0006`: negotiate HS-G4 through the private UniPro window
 - `0007`: add the DesignWare PCIe host glue (`pcie-charlotte`)
+- `0008`: give PCIe1 a 64-bit BAR window and inbound `dma-ranges`
+- `0009`: release PCIe1 through the platdrv FF-A secure partition
+- `0010`: amdgpu bus mastering + SI VRAM aperture refresh
+- `0011`: report the 56 MiB charlotte aperture and force GTT write-combined
+- `0012`: keep charlotte user-space VRAM mappings in GTT
+- `0013`: add the SI PASID TLB flush callback
+- `0014`: use I/O accessors for SI reset magic and UVD messages
 
 ### Tools
 
@@ -90,6 +97,7 @@ is only selected through `grub-reboot`; the GRUB default must stay on 5.10.
 - Build guide (Ubuntu/Debian on the board): [English](docs/build_guide_ubuntu_en.md) | [中文](docs/build_guide_ubuntu_zh.md)
 - UFS bring-up notes: [中文](docs/ufs_bringup_zh.md)
 - PCIe / amdgpu notes: [中文](docs/pci_amdgpu_zh.md)
+- amdgpu bring-up and desktop evidence: [中文](docs/amdgpu_bringup_zh.md)
 - USB Ethernet / network notes: [中文](docs/net_bringup_zh.md)
 - Display bring-up plan: [中文](docs/display_bringup_zh.md)
 - Patch set and rootfs chroot: [中文](docs/rootfs_chroot_zh.md)
@@ -99,7 +107,7 @@ is only selected through `grub-reboot`; the GRUB default must stay on 5.10.
 ## Build verification
 
 The repository was verified end-to-end on 2026-11-24: a clean upstream `v6.18`
-checkout, the seven patches and `defconfig/charlotte_6.18_defconfig` build an
+checkout, the patch series and `defconfig/charlotte_6.18_defconfig` build an
 Image whose configuration is identical to the working 6.18 image on the board.
 The image was booted and reproduces the expected functionality:
 

@@ -305,7 +305,7 @@
 		num-lanes = <1>;
 		max-link-speed = <3>;
 		rc-id = <0>;
-		status = "okay";
+		status = "disabled";
 	};
 
 
@@ -334,7 +334,14 @@
 				<0 0 0 3 &gic GIC_SPI 106 IRQ_TYPE_LEVEL_HIGH>,
 				<0 0 0 4 &gic GIC_SPI 107 IRQ_TYPE_LEVEL_HIGH>;
 		bus-range = <0 0xff>;
-		ranges = <0x02000000 0x0 0xea100000 0x0 0xea100000 0x0 0x03b00000>;
+		ranges = <0x02000000 0x0 0xea100000 0x0 0xea100000 0x0 0x03b00000>,
+			 <0x43000000 0x10 0x00000000 0x10 0x00000000 0x0 0x10000000>;
+		/*
+		 * Inbound windows for device DMA.  Each range has to stay
+		 * inside one 4 GiB block; the DWC host programs one inbound
+		 * iATU region per range, which is what lets the GPU read
+		 * rings and GART tables out of system memory.
+		 */
 		num-lanes = <1>;
 		max-link-speed = <3>;
 		rc-id = <1>;
@@ -342,7 +349,7 @@
 		 * keep it disabled until a card is present and its power
 		 * sequencing can be debugged against the vendor driver.
 		 */
-		status = "disabled";
+		status = "okay";
 	};
 	reserved-memory {
 		#address-cells = <2>;
