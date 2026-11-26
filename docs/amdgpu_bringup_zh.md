@@ -979,6 +979,17 @@ Xorg 不同。若仅独立 Xorg 退出时触发 `ttm_bo_release`，即可进一�
 和 IRQ 生命周期验收；`ttm_bo_release` 仅在复现时抓取；启动期
 fbcon pin 失败已用 fbdev 关闭规避；保留 0015/0016 基线。
 
+**本轮验收记录（2026-11-26）**
+
+- Xwayland：`glxinfo -B` 报告 AMD Radeon R7 200 Series
+  (radeonsi, oland, DRM 3.64)、GL 4.6；X11 `glxgears` 可运行；
+  未新增 `ttm_bo`/WARNING。
+- VT/IRQ：`chvt 1` 切到 tty1 的 GDM greeter，amdgpu IRQ
+  40366→40592；`chvt 2` 回 tty2 Wayland 后 41317，
+  `es2gears_wayland` 29.58/29.14 FPS；无 SError/ttm 告警。
+- 完整 greeter 密码登录→Wayland→注销→greeter 仍待手工或后续
+  自动化；greeter 本身在 tty1 已能硬件 EGL 启动。
+
 ## 9. 后续方案：小窗口下的显存访问与 GTT 中转
 
 本节为后续优化设计与验证计划。**当前桌面已经可用**（用户态 BO 走
