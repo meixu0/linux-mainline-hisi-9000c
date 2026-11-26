@@ -758,6 +758,15 @@ Wayland 验证。优先 GL 路径：当前硬件加速已有成功证据，而 P
   直到 start-limit 后 gdm.service 失败。自动登录用户会话不受影响。
 - 规避：保留自动登录；或恢复一个 X11 session 文件，让 greeter 有
   X11 回退。彻底修复需要先查清 greeter scanout BO 的 pin 失败。
+- 2026-11-26 采样确认：失败时可见窗口只用了 4.7 MiB（总 56 MiB），
+  VRAM 总用量 36.8 MiB，不是窗口耗尽。greeter 的 4K BO 已
+  `pin count 1` 且带 `VRAM_CONTIGUOUS` 标志，但底层 TTM resource
+  没有 `TTM_PL_FLAG_CONTIGUOUS`；按 `amdgpu_bo_pin()` 的已 pin
+  分支，这正是返回 `-EINVAL` 的条件。
+- 该 BO 来自 `No EGL display` 后的 shadow buffer 路径：EGL 失败
+  -> Mutter 选择 shadow buffer -> legacy set_base 要求连续 VRAM
+  -> pin 失败。修复应优先恢复 greeter 的 EGL/GBM 路径，或在
+  kernel 侧兼容“已 pin 但非连续”的 scanout BO，并验证显示无错位。
 
 **切分辨率：vblank/IRQ 停摆与修复**
 
@@ -879,9 +888,9 @@ fence 和显示更新，避免 CPU 改写 GPU 正在读取的 staging 或显示
 - **Xwayland 使用**：在 GNOME Wayland 下运行 X11 应用（xterm、
   glxgears、浏览器等），确认 Xwayland 走 radeonsi/DRI3、输入、
   窗口缩放和 vsync 正常；记录 Xwayland 与原生 Wayland 的差异。
-- **GDM greeter**：查清 greeter `gnome-shell` 的 EGL/pin 失败；
-  在保留 Wayland 用户会话的前提下，决定修复 EGL 或恢复 X11
-  greeter 回退。
+- **GDM greeter / scanout pin**：优先修复 greeter `gnome-shell` 的
+  EGL/shadow-buffer 路径；或在 kernel 里兼容“已 pin 但非连续”的
+  scanout BO，并验证显示无错位。临时可用自动登录或 X11 greeter。
 - **pin/unpin 警告**：为 `dce_v6_0_crtc_do_set_base()` 的旧 FB
   unpin 加保护；继续定位 `ttm_bo_release` 的 pin 泄漏。
 - **DPM 空闲档位**：确认桌面空闲时长期 825/1000 是否由 WebKit/
