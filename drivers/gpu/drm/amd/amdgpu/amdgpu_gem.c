@@ -199,7 +199,7 @@ static vm_fault_t amdgpu_gem_fault(struct vm_fault *vmf)
 	if (drm_dev_enter(ddev, &idx)) {
 		if (amdgpu_gem_force_gtt(adev) && bo->resource &&
 		    bo->resource->mem_type == TTM_PL_VRAM) {
-			int r = amdgpu_gem_bo_move_to_gtt_locked(adev, bo);
+			int r = amdgpu_gem_bo_move_to_gtt_locked(adev, ttm_to_amdgpu_bo(bo));
 
 			if (r) {
 				if (r == -EBUSY || r == -ERESTARTSYS)
