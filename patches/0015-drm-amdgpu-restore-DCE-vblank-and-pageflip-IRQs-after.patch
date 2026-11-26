@@ -1,0 +1,67 @@
+From f0f1ab2d597928ad003175ab3992d34aa60c7971 Mon Sep 17 00:00:00 2001
+From: hisi-9000c buildbot <buildbot@localhost>
+Date: Thu, 26 Nov 2026 17:31:00 +0800
+Subject: [PATCH] drm/amdgpu: restore DCE vblank and pageflip IRQs after a
+ modeset
+
+On SI (DCE 6.0) a modeset clears the CRTC vblank and pageflip interrupt
+masks.  dce_v6_0_crtc_dpms(ON) re-applies them from the amdgpu IRQ
+refcounts, but during the modeset those refcounts can be zero even
+though the compositor already has a flip in flight.  The masks stay
+disabled, the first post-modeset flip never signals, and Mutter plus
+its clients block forever waiting for a frame callback.
+
+Force the vblank and pageflip masks back on in
+dce_v6_0_crtc_commit() after the CRTC has been enabled.  This keeps the
+display pipeline alive across 3840x2160@30 <-> 1920x1080@60 switches.
+
+Tested on a Kirin 9000C board with an Oland [1002:6611] behind PCIe1:
+- GNOME Wayland: 4K@30 29.7 FPS, 1080p@60 56-59 FPS; six switches
+  while es2gears_wayland was rendering, amdgpu IRQ count kept rising,
+  no SError, GPU reset or ring timeout.
+- X11 (amdgpu DDX + SWcursor): 4K 30.3 FPS, 1080p 59.5 FPS, back to
+  4K 30.2 FPS; IRQ count kept rising.
+---
+ drivers/gpu/drm/amd/amdgpu/dce_v6_0.c | 23 +++++++++++++++++++++++
+ 1 file changed, 23 insertions(+)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/dce_v6_0.c b/drivers/gpu/drm/amd/amdgpu/dce_v6_0.c
+index acc887a..5e50cd6 100644
+--- a/drivers/gpu/drm/amd/amdgpu/dce_v6_0.c
++++ b/drivers/gpu/drm/amd/amdgpu/dce_v6_0.c
+@@ -2503,9 +2503,32 @@ static void dce_v6_0_crtc_prepare(struct drm_crtc *crtc)
+ 	dce_v6_0_crtc_dpms(crtc, DRM_MODE_DPMS_OFF);
+ }
+ 
++static void dce_v6_0_set_crtc_vblank_interrupt_state(struct amdgpu_device *adev,
++						     int crtc,
++						     enum amdgpu_interrupt_state state);
++static int dce_v6_0_set_pageflip_irq_state(struct amdgpu_device *adev,
++					   struct amdgpu_irq_src *src,
++					   unsigned type,
++					   enum amdgpu_interrupt_state state);
++
+ static void dce_v6_0_crtc_commit(struct drm_crtc *crtc)
+ {
++	struct amdgpu_crtc *amdgpu_crtc = to_amdgpu_crtc(crtc);
++	struct amdgpu_device *adev = drm_to_adev(crtc->dev);
++
+ 	dce_v6_0_crtc_dpms(crtc, DRM_MODE_DPMS_ON);
++	/*
++	 * A modeset can clear the display interrupt masks while the IRQ
++	 * source refcount stays unchanged, so amdgpu_irq_update() may not
++	 * rewrite them.  Restore the vblank and pageflip masks explicitly;
++	 * otherwise the compositor waits forever for a flip/vblank event
++	 * after a mode change.
++	 */
++	dce_v6_0_set_crtc_vblank_interrupt_state(adev, amdgpu_crtc->crtc_id,
++						 AMDGPU_IRQ_STATE_ENABLE);
++	dce_v6_0_set_pageflip_irq_state(adev, &adev->pageflip_irq,
++					amdgpu_crtc->crtc_id,
++					AMDGPU_IRQ_STATE_ENABLE);
+ 	amdgpu_atombios_crtc_lock(crtc, ATOM_DISABLE);
+ }
+ 
+-- 
+2.50.1 (Apple Git-155)
+

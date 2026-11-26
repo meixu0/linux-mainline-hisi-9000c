@@ -6,10 +6,10 @@
 > 跑通（radeonsi，GLES 3.2）。用户态 VRAM→GTT 策略（补丁 0012）
 > 消除了 EL0 SError；第 2 轮的 555 秒停顿未复现。
 >
-> 当前阻塞：GNOME Wayland 因 6.18 缺少 CONFIG_TMPFS_POSIX_ACL /
-> CONFIG_TMPFS_XATTR、logind 无法应用 DRM ACL 而回退 X11（正在重建）；
-> X11 切换分辨率仍会卡死（ttm_bo_unpin 不平衡）；LightDM greeter 的
-> scanout BO 仍有 VRAM↔GTT 往返。详见 8.8–8.10。
+> 当前状态：GNOME Wayland 可用，4K@30 vsync 约 29.7 FPS，1080p@60
+> 约 52–59 FPS；4K↔1080p 切换已由补丁 0015 修复，并在 Wayland/X11
+> 下做过往返和压力测试。仍有 GDM greeter 的 EGL 回退、`ttm_bo_unpin`
+> / `ttm_bo_release` WARNING 等非阻塞问题。详见 8.8–8.10。
 >
 > 本文第 8 节给出复核结论、实测记录和证据边界；radeon 仍是已验证的
 > 可用回退。
@@ -31,18 +31,18 @@
 | gfx / compute ring 初始化 | `amdgpu_device_ip_init()` 返回 0；未逐 ring 记录测试结果 |
 | 延迟 IB 测试（含 UVD） | 未单独验证；本轮日志未再出现对应 SError/超时 |
 | DRM 注册 | `Initialized amdgpu 3.64.0 ... on minor 0` |
-| fb0 | `amdgpudrmfb`，1680x1050，32bpp |
-| DVI-I-1 | `connected`、`enabled`、`dpms=On`、模式 1680x1050 |
+| fb0 | `amdgpudrmfb`，3840x2160@30，32bpp |
+| DVI-I-1 | `connected`、`enabled`、`dpms=On`、模式 3840x2160@30 |
 | 屏幕输出 | **已点亮**，可显示 initramfs/内核控制台 |
 | X11 桌面 | **通过**：amdgpu DDX + glamor/radeonsi + DRI3，GNOME X11 桌面可用 |
 | Weston Wayland | **通过**：DRM 输出 + radeonsi/GLES 3.2，鼠标键盘和终端正常 |
-| GNOME Wayland | **阻塞**：GDM 回退 X11；根因是 6.18 缺 `CONFIG_TMPFS_POSIX_ACL`/`XATTR`，正在重建 |
+| GNOME Wayland | **可用**：4K@30 vsync 约 29.7 FPS，1080p@60 约 52–59 FPS；4K↔1080p 切换已修复（补丁 0015） |
 | 硬件渲染 | **通过**：`glxinfo`/`eglinfo` 报告 `direct rendering: Yes`、`radeonsi/oland`、GL 4.6、GLES 3.2 |
-| vsync 性能 | 1080p@60 约 33 FPS，4K@30 约 17 FPS；关 vsync 1080p 148 FPS、4K 115 FPS |
+| vsync 性能 | GNOME Wayland 4K@30 约 29.7 FPS、1080p@60 约 52–59 FPS；关 vsync 3139 FPS；Weston 1080p 33 FPS / 4K 17 FPS |
 | 555 秒停顿 | 第 2 轮出现一次（554.9 秒）；第 3 轮未复现（`dri2`→`glamoregl` 仅 0.263 秒） |
-| X11 分辨率切换 | **会卡死**；`dce_v6_0_crtc_do_set_base` 路径出现 `ttm_bo_unpin` 不平衡告警，未修复 |
+| 切分辨率 | **已修复（补丁 0015）**：Wayland 4K↔1080p 往返和 X11 4K→1080p→4K 均正常；仍偶见 `ttm_bo_unpin`/`ttm_bo_release` WARNING（非致命） |
 | LightDM greeter | `SWcursor` 已消除 pinned 光标 BO 循环；scanout BO 仍有 VRAM↔GTT 往返 |
-| 整机稳定性 | GNOME X11 / Weston 连续运行，无 SError、无 panic、无 GPU reset |
+| 整机稳定性 | GNOME Wayland / X11 / Weston 连续运行，无 SError、无 panic、无 GPU reset |
 
 ## 1. 关键修复
 
@@ -696,9 +696,9 @@ Wayland 验证。优先 GL 路径：当前硬件加速已有成功证据，而 P
 - 第 1 项已完成：Xorg `Option "SWcursor" "true"` 已验证，pinned 光标
   BO 的缺页循环消失；未采用 dummy page。
 - 第 4 项已完成：Weston 独立会话验证通过，GL renderer 为 radeonsi；
-  GNOME Wayland 受 8.10 的 ACL 问题阻塞。
-- 新增：重建 6.18 内核启用 `CONFIG_TMPFS_POSIX_ACL` /
-  `CONFIG_TMPFS_XATTR`，然后验证 GDM Wayland。
+  GNOME Wayland 也已进入桌面（ACL 已修，补丁 0015 修复切分辨率）。
+- 已完成：重建 6.18 内核启用 `CONFIG_TMPFS_POSIX_ACL` /
+  `CONFIG_TMPFS_XATTR`，GDM Wayland 会话已验证。
 - 第 2、3 项（pin/unpin 配对、映射生命周期）仍待处理。
 
 ### 8.10 2026-11-26 Wayland、GDM 与性能实测
@@ -722,29 +722,54 @@ Wayland 验证。优先 GL 路径：当前硬件加速已有成功证据，而 P
 - 强制 high 后 vsync FPS 不变（仍受呈现路径限制），但 no-vsync
   吞吐明显提高。DPM auto 的升频策略仍需观察。
 
-**GDM / GNOME Wayland（当前阻塞）**
+**GDM / GNOME Wayland（可用，但会话选择有坑）**
 
-- GDM 的 Wayland greeter 和自动登录用户会话都回退到 X11，日志：
-  ```
-  Failed creating base context during opening of kernel driver.
-  Failed to initialize accelerated iGPU/dGPU framebuffer sharing: No EGL display
-  Failed to setup: The GPU /dev/dri/card0 chosen as primary is not supported by EGL.
-  ```
-- 同时 logind 报：
-  ```
-  systemd-logind: Failed to apply ACLs: Operation not supported
-  ```
-- 6.18 内核配置缺 `CONFIG_TMPFS_POSIX_ACL` / `CONFIG_TMPFS_XATTR`
-  （5.10 两者都是 y），导致 logind 无法给 `/dev/dri/*` 应用会话 ACL，
-  Mutter 通过 logind 获取 DRM master 失败，Wayland 回退 X11。
-- 手动把普通用户/GDM 用户加入 `video,render` 组后，`eglinfo` 能
-  看到 radeonsi，但 GDM 仍回退；因此按内核配置修复，正在重建。
+- 6.18 缺 `CONFIG_TMPFS_POSIX_ACL` / `CONFIG_TMPFS_XATTR` 会导致
+  logind 报 `Failed to apply ACLs`，已通过 defconfig 打开。
+- 即使 ACL 修好，GDM 仍可能按 AccountsService/DefaultSession 或
+  `xsessions` 里的同名 `gnome.desktop` 启动 X11；强制只保留 Wayland
+  的 `gnome.desktop`、设置 `DefaultSession=gnome` 后，会话类型为
+  `Type=wayland`。
+- GNOME Wayland 下 `eglinfo` 显示 radeonsi/GLES 3.2；4K@30 时
+  vsync `es2gears` 约 29.7 FPS（对应 30 Hz），60 秒稳定；
+  1080p@60 时约 52–59 FPS；`vblank_mode=0` 时达到 **3139 FPS**，
+  GPU 渲染无问题。
+- GDM greeter 仍可能打印 `No EGL display` 并回退 X11，但 autologin
+  的 Wayland 用户会话不受影响；这是 greeter 的独立问题。
+
+**切分辨率：vblank/IRQ 停摆与修复**
+
+- 通过 Mutter `ApplyMonitorsConfig` 从 3840x2160@30 切到 1920x1080@60，
+  模式切换本身成功。
+- 之后 `amdgpu` IRQ 计数 2 秒内 **152957 → 152957**，完全不递增；
+  `es2gears_wayland` / `weston-simple-egl` 等 frame callback 不返回，
+  客户端阻塞；切回 4K 也不能恢复；无 SError/panic，GPU fence 均
+  signaled。
+- 重启 GDM 后 IRQ 恢复递增（160391 → 163105/2s），说明是 DCE
+  modeset 后 vblank/pageflip 中断掩码丢失，和 X11 切分辨率卡死同源。
+- 修复（补丁 0015）：在 `dce_v6_0_crtc_commit()` 的 DPMS_ON 之后显式
+  恢复该 CRTC 的 vblank 和 pageflip 中断掩码。modeset 期间 amdgpu IRQ
+  引用计数可能为 0，`dce_v6_0_crtc_dpms()` 里的 `amdgpu_irq_update()`
+  会把掩码重新关掉，导致 modeset 后的第一个 flip 永远等不到中断。
+- 验证（6.18 #165，Image SHA256 `436585609ba5a3667ba1c1234fcdf1d707f4ca6a482f72e74c2b556c929e22a1`）：
+  - GNOME Wayland：4K@30 29.7 FPS；切到 1080p@60 后 52–58 FPS；
+    4K→1080p→4K→1080p→4K 往返正常；在 `es2gears_wayland` 持续
+    渲染时连续切 6 次，FPS 随刷新率变化，amdgpu IRQ 从 134100 涨到
+    207512，无 SError/panic/GPU reset/ring timeout。
+  - X11（独立 Xorg，amdgpu DDX + SWcursor）：4K 30.3 FPS、1080p
+    59.5 FPS、切回 4K 30.2 FPS，IRQ 随渲染增长。
 
 **桌面状态**
 
-- LightDM greeter 加 `Xorg Option "SWcursor"` 后 pinned 光标 BO 循环
-  消失，但 Xorg scanout BO 仍有 VRAM↔GTT 往返；X11 分辨率切换的
-  `ttm_bo_unpin` 告警仍未修复。
+- LightDM greeter 的 pinned 光标 BO 循环已由 Xorg `SWcursor` 消除；
+  Xorg scanout BO 仍有 VRAM↔GTT 往返。
+- 启动时 `dce_v6_0_crtc_do_set_base()` 仍会触发一次 `ttm_bo_unpin`
+  WARNING；X11 客户端退出时偶见 `ttm_bo_release` WARNING。两者都
+  不阻塞显示，和 vblank 中断停摆是独立问题。
+- GNOME Wayland 可用；4K↔1080p 切换已验证。GDM 自动登录后
+  GNOME 会话初始化（UPower/colord/IBus 等 D-Bus 超时）可能需要
+  1–2 分钟，期间太早启动 Wayland 客户端可能等不到 frame callback；
+  等会话稳定后再测。
 
 ## 9. 后续方案：小窗口下的显存访问与 GTT 中转
 

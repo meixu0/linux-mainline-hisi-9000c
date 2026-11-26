@@ -19,20 +19,22 @@ Baseline: upstream `v6.18`. Apply in order with `git am`.
 | 0012 | drm/amdgpu: keep charlotte user-space VRAM mappings in GTT | GPU |
 | 0013 | drm/amdgpu: add the SI PASID TLB flush callback | GPU |
 | 0014 | drm/amdgpu: use I/O accessors for SI reset magic and UVD messages | GPU |
+| 0015 | drm/amdgpu: restore DCE vblank and pageflip IRQs after a modeset | GPU |
 
 ## Status
 
-0001-0014 are functional.  PCIe1 (the external x1 slot) trains, enumerates
+0001-0015 are functional.  PCIe1 (the external x1 slot) trains, enumerates
 and gives the card a 256 MiB BAR0; on this board BAR0 is relocated to bus
 `0x90000000` and the CPU reaches 56 MiB of it through the low window at
 `0xea200000`.  0009 also programs the inbound iATU windows for device DMA
 (do **not** use `dma-ranges` for this board, see the doc).
 
 amdgpu brings up VBIOS, VRAM, GART, DPM and the display connectors, and
-reaches an X11 GNOME desktop with amdgpu DDX + glamor/radeonsi + DRI3
-(hardware acceleration, GL 4.6 / GLES 3.2 at 1680x1050).  The SI VRAM
-window, GTT cache policy, user-space GTT policy, PASID TLB flush and
-8-byte-safe VRAM accessors are patches 0010-0014.  See
+reaches X11 GNOME, Weston and GNOME Wayland with radeonsi (GL 4.6 /
+GLES 3.2).  The SI VRAM window, GTT cache policy, user-space GTT policy,
+PASID TLB flush and 8-byte-safe VRAM accessors are patches 0010-0014;
+patch 0015 restores the DCE vblank/pageflip IRQ masks after a modeset,
+which fixes 4K↔1080p switching (verified under Wayland and X11).  See
 `docs/amdgpu_bringup_zh.md` for the evidence and the remaining
 observations.
 
@@ -46,7 +48,7 @@ git am /path/to/patches/*.patch
 ```
 
 The series has been verified with `git am` on a clean `v6.18` checkout: all
-fourteen commits replay without conflicts.
+fifteen commits replay without conflicts.
 
 ## Notes
 

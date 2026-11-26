@@ -30,7 +30,7 @@ The board boots through UEFI. The stock vendor 5.10 kernel
 | PCIe0 (onboard ASM1064 SATA)          | yes         | yes, Gen3 x1 + `ahci`                                                     |
 | PCIe1 (external x1 slot)              | yes         | yes, Gen3 x1; needs FF-A `SET_MEM_UNSEC`; BAR0 at bus `0x90000000`, 56 MiB CPU window at `0xea200000` |
 | USB Ethernet (RTL8153 / `r8152`)      | yes         | yes, 1000/full, DHCP + IPv6                                               |
-| amdgpu                                | not built   | yes: X11 GNOME and Weston Wayland, radeonsi/GLES 3.2; known issues below |
+| amdgpu                                | not built   | yes: X11 GNOME, Weston and GNOME Wayland; radeonsi/GLES 3.2; 4K↔1080p mode switching fixed; known issues below |
 | Display (vendor DPU/HDMI)             | yes         | not yet (vendor `dkmd` only)                                              |
 | Network in initramfs                  | n/a         | yes (`net-dhcp`)                                                          |
 
@@ -60,15 +60,22 @@ Kirin 9000C UFS/PCIe/clock blocks are different.
 - `0012`: keep charlotte user-space VRAM mappings in GTT
 - `0013`: add the SI PASID TLB flush callback
 - `0014`: use I/O accessors for SI reset magic and UVD messages
+- `0015`: restore DCE vblank/pageflip IRQs after a modeset
 
 ### Known issues / current work
 
-- GNOME Wayland currently falls back to X11: the 6.18 config lacks
-  `CONFIG_TMPFS_POSIX_ACL` / `CONFIG_TMPFS_XATTR`, so logind cannot apply
-  session ACLs to `/dev/dri/*` and Mutter fails to take DRM master. The
-  defconfig now enables both; a rebuilt image is being verified.
-- X11 mode switching can hang; `dce_v6_0_crtc_do_set_base` shows an
-  unbalanced `ttm_bo_unpin` after scanout BOs move between VRAM and GTT.
+- GNOME Wayland works when only the Wayland session is available; GDM's
+  greeter may still log `No EGL display` and fall back to X11. With
+  autologin the Wayland user session is unaffected.
+- 4K↔1080p mode switching is fixed by patch 0015 (restore the DCE
+  vblank/pageflip IRQ masks after a modeset). Verified under GNOME
+  Wayland (six switches under load) and X11. A `ttm_bo_unpin` warning
+  can still appear from `dce_v6_0_crtc_do_set_base` at session start,
+  and `ttm_bo_release` can warn when an X11 client exits; neither is
+  fatal and both are separate from the IRQ fix.
+- GNOME session startup can take 1–2 minutes because UPower/colord/IBus
+  D-Bus activations time out; Wayland clients started too early may
+  block on frame callbacks.
 - Weston with vsync is half the monitor refresh (33 FPS at 1080p60,
   17 FPS at 4K30); with `vblank_mode=0` it reaches ~148 FPS / 115 FPS.
   This is a presentation-path issue (legacy non-atomic DRM), not GPU

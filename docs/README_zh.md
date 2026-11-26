@@ -30,7 +30,7 @@ Linux 6.18 主线移植：构建脚本、补丁、内核配置、设备树和工
 | PCIe0（板载 ASM1064 SATA）     | 是         | 是，Gen3 x1 + `ahci`                                                                                                          |
 | PCIe1（外部 x1 插槽）            | 是         | 是，Gen3 x1；需 FF-A `SET_MEM_UNSEC`，BAR0 在总线侧 `0x90000000`、经低 4 GiB 的 56 MiB 窗口映射                                              |
 | Radeon 显卡（Oland）           | —         | **是**：5 个 ring + 5 个 IB 测试全部通过，fbdev 输出正常、屏幕文字可读                                                                            |
-| amdgpu                     | 未编入       | **X11 + Weston 可用（有已知问题）**：GMC/GART、UVD、fb0、DVI-I-1 正常；amdgpu DDX + glamor/radeonsi + DRI3 下 GL 4.6 / GLES 3.2，Weston Wayland 也已跑通。已知：GNOME Wayland 因 6.18 缺 `CONFIG_TMPFS_POSIX_ACL`/`XATTR` 而回退 X11（defconfig 已补，正在重建）；X11 切分辨率会卡死（`ttm_bo_unpin`）；vsync 下只有半刷新率（1080p 33 FPS，关 vsync 148 FPS） |
+| amdgpu                     | 未编入       | **X11 / Weston / GNOME Wayland 可用（有已知问题）**：GMC/GART、UVD、fb0、DVI-I-1 正常；radeonsi 下 GL 4.6 / GLES 3.2。GNOME Wayland 4K@30 vsync 约 29.7 FPS、1080p@60 约 52–59 FPS，关 vsync 3139 FPS；4K↔1080p 切换已由补丁 0015 修复，X11/Wayland 均已复测 |
 | 显示（厂商 DPU/HDMI）            | 是         | 尚未（只有厂商 `dkmd`）                                                                                                             |
 
 ### 补丁来源
@@ -63,6 +63,7 @@ Linux 6.18 主线移植：构建脚本、补丁、内核配置、设备树和工
 - `0012`：用户态 VRAM BO 在 mmap/fault 时迁移到 GTT
 - `0013`：补上 SI 的 PASID TLB flush 回调
 - `0014`：reset magic 和 UVD 消息缓冲区改用 I/O 访问器
+- `0015`：modeset 后恢复 DCE vblank/pageflip 中断掩码，修复 4K↔1080p 切换
 - 实测与证据见 [amdgpu_bringup_zh.md](amdgpu_bringup_zh.md)
 
 ### 工具
@@ -77,13 +78,12 @@ Linux 6.18 主线移植：构建脚本、补丁、内核配置、设备树和工
 - PCIe / amdgpu 笔记：[中文](pci_amdgpu_zh.md)
 - PCIe1 / FF-A / 64 位窗口：[中文](pcie1_ffa_bar_zh.md)
 - amdgpu 迁移记录：[中文](amdgpu_bringup_zh.md)
-- 当前可用桌面：radeon + LightDM，DVI-I-1 @1680x1050；
-  amdgpu 也已在同一分辨率下进入 X11 GNOME 桌面，amdgpu DDX +
-  glamor/radeonsi + DRI3，`glxinfo` 显示硬件加速（GL 4.6 /
-  GLES 3.2）。用户态 VRAM→GTT 策略让 SError 消失；第 2 轮出现的
-  约 555 秒 Xorg 停顿在第 3 轮未复现。诊断服务已修正（不再读取
-  1 GiB 的 `amdgpu_vram` debugfs）并暂时禁用。详见
-  [amdgpu_bringup_zh.md](amdgpu_bringup_zh.md) 第 8 节
+- 当前可用桌面：GNOME Wayland（amdgpu + radeonsi，DVI-I-1
+  @3840x2160@30）；X11 GNOME 和 Weston 也可用。4K↔1080p 切换已由
+  补丁 0015 修复并在 Wayland/X11 下复测。用户态 VRAM→GTT 策略让
+  SError 消失；第 2 轮出现的约 555 秒 Xorg 停顿在第 3 轮未复现。
+  诊断服务已修正（不再读取 1 GiB 的 `amdgpu_vram` debugfs）并暂时
+  禁用。详见 [amdgpu_bringup_zh.md](amdgpu_bringup_zh.md) 第 8 节
 - USB 网卡 / 网络笔记：[中文](net_bringup_zh.md)
 - 显示移植计划：[中文](display_bringup_zh.md)
 - 完整移植报告：[中文](bringup_report_zh.md)
