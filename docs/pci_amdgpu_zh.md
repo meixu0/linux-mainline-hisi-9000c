@@ -142,8 +142,9 @@ cat /sys/bus/pci/devices/0000:00:00.0/resource   # 桥窗口
    （radeonsi/GLES 3.2）。
 3. GNOME Wayland 和 GDM greeter 已可用（greeter 的板级 PAM 显示
    兼容库注入已禁用）；4K↔1080p 切换由补丁 0015 修复，启动
-   `ttm_bo_unpin` 告警由 0016 修复。`ttm_bo_release` 和启动
-   `pin failed` 仍是非致命观察项。
+   `ttm_bo_unpin` 告警由 0016 修复。启动期 `pin failed` 已定位为
+   4K fbcon 的连续 VRAM 分配失败，`drm_kms_helper.fbdev_emulation=0`
+   后消失；`ttm_bo_release` 近期未复现。
 4. 详细证据见 [`amdgpu_bringup_zh.md`](amdgpu_bringup_zh.md) 第 8 节。
 
 ---

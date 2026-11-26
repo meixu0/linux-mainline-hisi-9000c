@@ -78,9 +78,13 @@ Kirin 9000C UFS/PCIe/clock blocks are different.
   vblank/pageflip IRQ masks after a modeset). Verified under GNOME
   Wayland (six switches under load) and X11. The session-start
   `ttm_bo_unpin` warning is fixed by patch 0016: the legacy set_base
-  path now unpins the old FB only when it holds a pin. The user-session
-  startup `pin failed` messages and the X11-client-exit
-  `ttm_bo_release` warning remain; neither is fatal.
+  path now unpins the old FB only when it holds a pin. The startup
+  `pin failed` messages were traced to the 4K fbcon BO's contiguous
+  VRAM pin failure; disabling DRM fbdev
+  (`drm_kms_helper.fbdev_emulation=0`) removes them while the
+  compositor keeps 4K (the boot display console is lost, serial
+  remains). The X11-client-exit `ttm_bo_release` warning was not
+  reproduced in recent tests and remains an X11/DDX observation.
 - GNOME session startup can take 1–2 minutes because UPower/colord/IBus
   D-Bus activations time out; Wayland clients started too early may
   block on frame callbacks.
@@ -109,7 +113,7 @@ Kirin 9000C UFS/PCIe/clock blocks are different.
 - UFS bring-up notes: [中文](docs/ufs_bringup_zh.md)
 - PCIe / amdgpu notes: [中文](docs/pci_amdgpu_zh.md)
 - amdgpu bring-up and desktop evidence: [中文](docs/amdgpu_bringup_zh.md)
-- GDM greeter scanout BO pin analysis: [中文](docs/scanout_bo_pin_zh.md)
+- scanout BO pin analysis (greeter PAM / 4K fbcon / 0016): [中文](docs/scanout_bo_pin_zh.md)
 - USB Ethernet / network notes: [中文](docs/net_bringup_zh.md)
 - Display bring-up plan: [中文](docs/display_bringup_zh.md)
 - Full bring-up report: [中文](docs/bringup_report_zh.md)

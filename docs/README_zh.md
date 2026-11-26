@@ -30,7 +30,7 @@ Linux 6.18 主线移植：构建脚本、补丁、内核配置、设备树和工
 | PCIe0（板载 ASM1064 SATA）     | 是         | 是，Gen3 x1 + `ahci`                                                                                                          |
 | PCIe1（外部 x1 插槽）            | 是         | 是，Gen3 x1；需 FF-A `SET_MEM_UNSEC`，BAR0 在总线侧 `0x90000000`、经低 4 GiB 的 56 MiB 窗口映射                                              |
 | Radeon 显卡（Oland）           | —         | **是**：5 个 ring + 5 个 IB 测试全部通过，fbdev 输出正常、屏幕文字可读                                                                            |
-| amdgpu                     | 未编入       | **X11 / Weston / GNOME Wayland 可用（有已知问题）**：GMC/GART、UVD、fb0、DVI-I-1 正常；radeonsi 下 GL 4.6 / GLES 3.2。GNOME Wayland 4K@30 vsync 约 29.7 FPS、1080p@60 约 52–59 FPS，关 vsync 3139 FPS；4K↔1080p 切换已由补丁 0015 修复，X11/Wayland 均已复测 |
+| amdgpu                     | 未编入       | **X11 / Weston / GNOME Wayland 可用（有已知问题）**：GMC/GART、UVD、DVI-I-1/合成器正常（关闭 DRM fbdev 后无 fb0）；radeonsi 下 GL 4.6 / GLES 3.2。GNOME Wayland 4K@30 vsync 约 29.7 FPS、1080p@60 约 52–59 FPS，关 vsync 3139 FPS；4K↔1080p 切换已由补丁 0015 修复，X11/Wayland 均已复测 |
 | 显示（厂商 DPU/HDMI）            | 是         | 尚未（只有厂商 `dkmd`）                                                                                                             |
 
 ### 补丁来源
@@ -79,7 +79,7 @@ Linux 6.18 主线移植：构建脚本、补丁、内核配置、设备树和工
 - PCIe / amdgpu 笔记：[中文](pci_amdgpu_zh.md)
 - PCIe1 / FF-A / 64 位窗口：[中文](pcie1_ffa_bar_zh.md)
 - amdgpu 迁移记录：[中文](amdgpu_bringup_zh.md)
-- GDM greeter scanout BO pin 失败分析（已修复：PAM 环境注入）：[中文](scanout_bo_pin_zh.md)
+- scanout BO pin 失败分析（greeter PAM / 4K fbcon / 0016）：[中文](scanout_bo_pin_zh.md)
 - 当前可用桌面：GNOME Wayland（amdgpu + radeonsi，DVI-I-1
   @3840x2160@30）；X11 GNOME 和 Weston 也可用。4K↔1080p 切换已由
   补丁 0015 修复并在 Wayland/X11 下复测。用户态 VRAM→GTT 策略让

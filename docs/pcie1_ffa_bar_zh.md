@@ -307,8 +307,9 @@ VRAM 的帧缓冲内容。
    仍保留少量定位输出，正式镜像前应移除。
 3. **桌面栈**：X11、Weston 和 GNOME Wayland 已验证；4K↔1080p
    切换由补丁 0015 修复，启动 `ttm_bo_unpin` 告警由 0016 修复。
-   `ttm_bo_release` / 启动 `pin failed` 仍是非致命观察项；Weston
-   vsync 半刷新率仍待优化。
+   启动期 `pin failed` 已定位为 4K fbcon 的连续 VRAM 分配失败，
+   `drm_kms_helper.fbdev_emulation=0` 后消失；`ttm_bo_release` 近期
+   未复现；Weston vsync 半刷新率仍待优化。
 4. **视频硬解**：UVD 固件已内嵌，但未单独验证硬解；非阻塞项。
 
 ## 7. 已被推翻、不要重复的结论

@@ -37,7 +37,10 @@ PASID TLB flush and 8-byte-safe VRAM accessors are patches 0010-0014;
 patch 0015 restores the DCE vblank/pageflip IRQ masks after a modeset,
 which fixes 4K↔1080p switching (verified under Wayland and X11);
 patch 0016 only unpins the old FB when the legacy set_base path holds
-a pin, removing the session-start ttm_bo_unpin warning.  See
+a pin, removing the session-start ttm_bo_unpin warning.  The boot-time
+4K fbcon pin failure is avoided by disabling DRM fbdev
+(`drm_kms_helper.fbdev_emulation=0`, a boot config rather than a
+patch) while the compositor keeps 4K.  See
 `docs/amdgpu_bringup_zh.md` for the evidence and the remaining
 observations.
 

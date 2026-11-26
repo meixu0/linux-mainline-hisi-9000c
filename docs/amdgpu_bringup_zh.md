@@ -10,8 +10,10 @@
 > 约 52–59 FPS；4K↔1080p 切换已由补丁 0015 修复，并在 Wayland/X11
 > 下做过往返和压力测试。GDM greeter 已修复（板级 PAM 环境注入的
 > SoC 显示兼容库与 dGPU EGL 冲突）；`ttm_bo_unpin` 启动告警已由
-> 补丁 0016 修复；`ttm_bo_release` 和启动时 `pin failed` 仍是非阻塞
-> 观察项。详见 8.8–8.11。
+> 补丁 0016 修复；启动期 `pin failed` 已定位为 4K fbcon 的连续
+> VRAM 分配失败，关闭 DRM fbdev（`drm_kms_helper.fbdev_emulation=0`）
+> 后消失，4K 合成器桌面不受影响；`ttm_bo_release` 近期未复现。
+> 详见 8.8–8.12。
 >
 > 本文第 8 节给出复核结论、实测记录和证据边界；radeon 仍是已验证的
 > 可用回退。
@@ -33,13 +35,14 @@
 | gfx / compute ring 初始化 | `amdgpu_device_ip_init()` 返回 0；未逐 ring 记录测试结果 |
 | 延迟 IB 测试（含 UVD） | 未单独验证；本轮日志未再出现对应 SError/超时 |
 | DRM 注册 | `Initialized amdgpu 3.64.0 ... on minor 0` |
-| fb0 | `amdgpudrmfb`，3840x2160@30，32bpp |
+| fb0 | **当前无 fb0**（`drm_kms_helper.fbdev_emulation=0`）；修复前为 `amdgpudrmfb` 3840x2160@30，32bpp |
 | DVI-I-1 | `connected`、`enabled`、`dpms=On`、模式 3840x2160@30 |
-| 屏幕输出 | **已点亮**，可显示 initramfs/内核控制台 |
+| 屏幕输出 | **合成器 4K 可用**；关闭 DRM fbdev 后启动期无显示控制台，串口控制台可用 |
 | X11 桌面 | **通过**：amdgpu DDX + glamor/radeonsi + DRI3，GNOME X11 桌面可用 |
 | Weston Wayland | **通过**：DRM 输出 + radeonsi/GLES 3.2，鼠标键盘和终端正常 |
 | GNOME Wayland | **可用**：4K@30 vsync 约 29.7 FPS，1080p@60 约 52–59 FPS；4K↔1080p 切换已修复（补丁 0015） |
 | GDM greeter | **已修复**：去除 greeter 的板级 SoC 显示兼容库注入后，Wayland greeter 正常；用户会话不受影响 |
+| 启动期 pin failed | **已规避**：4K fbcon 在 56 MiB 可见窗口内连续 VRAM 分配失败；`drm_kms_helper.fbdev_emulation=0` 后为 0，4K 合成器不受影响 |
 | 硬件渲染 | **通过**：`glxinfo`/`eglinfo` 报告 `direct rendering: Yes`、`radeonsi/oland`、GL 4.6、GLES 3.2 |
 | vsync 性能 | GNOME Wayland 4K@30 约 29.7 FPS、1080p@60 约 52–59 FPS；关 vsync 3139 FPS；Weston 1080p 33 FPS / 4K 17 FPS |
 | 555 秒停顿 | 第 2 轮出现一次（554.9 秒）；第 3 轮未复现（`dri2`→`glamoregl` 仅 0.263 秒） |
@@ -760,11 +763,10 @@ Wayland 验证。优先 GL 路径：当前硬件加速已有成功证据，而 P
   installed, aborting...` 并以 SIGTRAP 退出，systemd 进入重启循环，
   直到 start-limit 后 gdm.service 失败。自动登录用户会话不受影响。
 - 修复前可保留自动登录或 X11 greeter 回退；修复后不需要这些规避。
-- 2026-11-26 采样确认：失败时可见窗口只用了 4.7 MiB（总 56 MiB），
-  VRAM 总用量 36.8 MiB，不是窗口耗尽。greeter 的 4K BO 已
-  `pin count 1` 且带 `VRAM_CONTIGUOUS` 标志，但底层 TTM resource
-  没有 `TTM_PL_FLAG_CONTIGUOUS`；按 `amdgpu_bo_pin()` 的已 pin
-  分支，这正是返回 `-EINVAL` 的条件。
+- 2026-11-26 采样：失败时可见窗口只用 4.7 MiB，VRAM 36.8 MiB，
+  不是窗口耗尽。`pin failed` 来自 `amdgpu_bo_pin()` 的
+  `ttm_bo_validate()` 失败路径；采样中已 pin 的 4K BO 不是必然的
+  失败 BO。后续 #168 的栈回溯才直接确认启动期失败来自 4K fbcon。
 - 该 BO 来自 `No EGL display` 后的 shadow buffer 路径：EGL 失败
   -> Mutter 选择 shadow buffer -> legacy set_base 要求连续 VRAM
   -> pin 失败。修复 EGL 后不再触发；不需要为 greeter 的 shadow
@@ -791,8 +793,8 @@ Wayland 验证。优先 GL 路径：当前硬件加速已有成功证据，而 P
 - greeter 的 scanout BO pin 失败是 EGL 失败后的 shadow buffer
   下游症状；修复 EGL 后不再触发，不需要为它修改 kernel 的 pin
   逻辑（补丁 0016 只修旧 FB 的 unpin 边界）。
-- 非致命的 `pin failed` 仍可能在用户会话启动时出现（旧 FB 的
-  pin/unpin 计数问题），不阻塞显示，属于独立清理项。
+- 启动期剩余的 `pin failed` 不是用户会话路径，而是 4K fbcon；
+  关闭 DRM fbdev 后消失，详见“桌面状态”和第 8.12 节。
 
 **切分辨率：vblank/IRQ 停摆与修复**
 
@@ -821,10 +823,13 @@ Wayland 验证。优先 GL 路径：当前硬件加速已有成功证据，而 P
 - LightDM greeter 的 pinned 光标 BO 循环已由 Xorg `SWcursor` 消除；
   Xorg scanout BO 仍有 VRAM↔GTT 往返。
 - 补丁 0016 在 legacy set_base 里只在旧 FB 确实持有 pin 时才 unpin，
-  启动时的 `ttm_bo_unpin` WARNING 已消失。用户会话启动时仍可能
-  出现非致命的 `pin failed`；X11 客户端退出时的 `ttm_bo_release`
-  WARNING 仍需单独查 DRI3/scanout 的 pin 生命周期。两者都不阻塞
-  显示，和 vblank 中断停摆无关。
+  启动时的 `ttm_bo_unpin` WARNING 已消失。启动期 `pin failed` 的
+  栈回溯确认来自 4K fbcon 在 `drm_fb_helper_set_par` 中的连续 VRAM
+  分配失败；6.18 测试启动行加 `drm_kms_helper.fbdev_emulation=0`
+  后 `pin failed` 为 0，4K Wayland 仍正常（约 28.9 FPS），代价是
+  启动时无 fb0/显示控制台，串口控制台仍可用。`ttm_bo_release` 在
+  近期 Wayland/Xwayland/独立 Xorg 测试中未复现，保留为 X11/DDX
+  侧观察项。
 - GNOME Wayland 可用；4K↔1080p 切换已验证。GDM 自动登录后
   GNOME 会话初始化（UPower/colord/IBus 等 D-Bus 超时）可能需要
   1–2 分钟，期间太早启动 Wayland 客户端可能等不到 frame callback；
@@ -854,7 +859,9 @@ name 'wayland-0'`，并注册 GDM；`No EGL display` 和 greeter 的
 **2. scanout pin 失败（greeter 路径已关闭）**
 
 greeter EGL 修复后不再回退 shadow buffer，因此不需要再为 greeter
-补 BO 直接关联。用户会话启动时的非致命 `pin failed` 归入下一节。
+补 BO 直接关联。启动期剩余的 `pin failed` 已由 #168 的栈回溯定位
+为 4K fbcon 在 `drm_fb_helper_set_par` 中的连续 VRAM 分配失败，
+不是用户会话路径；关闭 DRM fbdev 后消失，详见第 8.12 节。
 
 不采用“取消连续标志要求／接受该组合”的方案。清掉检查不能让显存
 真正连续；需要在首次 pin 前满足显示要求，或使用独立、满足连续性
@@ -862,10 +869,12 @@ greeter EGL 修复后不再回退 shadow buffer，因此不需要再为 greeter
 
 **3. 收尾两个 pin 生命周期告警**
 
-unpin 下溢已由补丁 0016 在 legacy set_base 的旧 FB 边界处修复：
-只有旧 FB 确实持有 pin 时才 unpin。X11 客户端退出时释放仍带 pin
-的 `ttm_bo_release` 告警仍需单独追踪，沿 DRI3/scanout 的 pin
-生命周期记录配对关系；不能假设两者互相抵消。
+补丁 0016 已避免 legacy set_base 对零 pin_count 的旧 FB 执行 unpin，
+实测启动告警消失；但计数非零不证明 pin 属于该路径，所有权仍需
+核对。启动期 `pin failed` 已定位为 4K fbcon 并经
+`drm_kms_helper.fbdev_emulation=0` 消除。X11 客户端退出时的
+`ttm_bo_release` 告警近期未复现，保留为 DRI3/DDX 观察项；若复现
+再按 8.12 节记录。
 
 同时核对当前镜像是否仍含旧的 `-EBUSY → VM_FAULT_NOPAGE` 分支。
 `SWcursor` 已绕过触发条件，但不代表 fault 返回语义已修好；第 8.9
@@ -886,16 +895,96 @@ greeter EGL 已修复；下一轮做完整往返验收：
 greeter 硬件加速启动 → 登录 Wayland → 退出回 greeter
 ```
 
-同时继续收尾非致命 `pin failed`/`ttm_bo_release` 警告和 IRQ 生命周期。Xwayland 功能
-验证随后进行；扩大窗口、完整 staging 和 Weston 半刷新率优化暂排
-在上述工作之后。
+启动期 `pin failed` 已由 fbdev 关闭规避，`ttm_bo_release` 近期
+未复现；继续收尾 IRQ 生命周期和完整往返。Xwayland 功能验证随后
+进行；扩大窗口、完整 staging 和 Weston 半刷新率优化暂排在上述
+工作之后。
+
+### 8.12 剩余问题：会话交接与 BO 生命周期收尾
+
+当前 greeter EGL、用户 Wayland、4K↔1080p 和旧 FB unpin 已修复。
+启动期 `pin failed` 已由 #168 栈回溯定位为 4K fbcon 的
+`ttm_bo_validate()` `-ENOMEM`（不是已 pin 连续分支），并在 6.18
+启动行关闭 DRM fbdev 后消失；4K 合成器桌面不受影响，代价是无
+`fb0`/显示控制台，串口控制台保留。`ttm_bo_release` 在近期
+Wayland/Xwayland/独立 Xorg 测试中未复现，保留为 X11/DDX 观察项。
+以下是后续验收项，不代表当前阻塞。
+
+**补丁 0016 的边界**
+
+`if (abo->tbo.pin_count)` 避免零计数 unpin，已有实测价值；但计数
+非零只能证明有人持有 pin，不能证明该 pin 属于 legacy set_base。
+因此告警消失不等于 pin 所有权已核清，仍须验证取得与释放的配对。
+
+**1. 启动期 pin failed：4K fbcon（已定位/已规避）**
+
+#168 栈（节选）：
+
+```text
+amdgpu_bo_pin
+dce_v6_0_crtc_do_set_base
+dce_v6_0_crtc_mode_set
+drm_crtc_helper_set_mode
+...
+drm_fb_helper_set_par
+fbcon_init
+...
+amdgpu_pci_probe
+```
+
+失败 BO：`size=33,177,600`、`ret=-12 (-ENOMEM)`、`pin=0`、连续
+placement；不是 `-EINVAL` 已 pin 连续分支。4K fbcon BO 需要连续
+可见 VRAM；56 MiB 窗口无法同时满足该 fbcon 缓冲和同类可见 BO。
+
+规避：6.18 测试启动行加 `drm_kms_helper.fbdev_emulation=0`。
+验证启动后 `pin failed` 为 0、`fb0` 不存在、4K Wayland 约
+28.9 FPS；代价是无显示控制台，串口控制台可用。若必须保留显示
+控制台，可评估 1080p fbcon（本轮未验证）。不需要为此修改 kernel
+pin 逻辑。
+
+**2. ttm_bo_release：独立 Xorg 下追踪最后一个 pin**
+
+近期 Wayland/Xwayland/独立 Xorg 测试未复现；不据此修改
+`ttm_bo_release()`。若再次出现，分别覆盖窗口化/全屏/异常退出/
+Xorg 整体退出，关联最后一次成功 pin、对应 unpin 和未完成
+flip/fence；修复应落在取得/释放路径，不能强制清零。
+
+**3. Greeter 完整往返：验收并采集交接证据**
+
+关闭自动登录，实际完成：
+
+```text
+greeter → 登录 GNOME Wayland → 运行应用 → 注销 → greeter → 再登录
+```
+
+每个边界保存会话进程、DRM framebuffer/BO 摘要及新增内核日志。
+确认返回 greeter 后仍使用硬件 EGL，键鼠、画面及 frame callback
+正常；观察旧会话退出后 pinned BO 和显存用量是否持续累积。不要求
+显存立即归零，需区分正常缓存与随往返持续增长的资源。
+
+**4. Xwayland：与独立 Xorg 分开验收**
+
+在 GNOME Wayland 中明确启动 X11 客户端，验证：
+
+- `glxinfo -B` 的实际 renderer 为 radeonsi/Oland；
+- 窗口创建、缩放、最大化、全屏、输入及关闭正常；
+- 渲染中切换分辨率、退出后无新增告警或卡顿；
+- 正常和异常退出均能正确释放资源。
+
+Xwayland 不以加载 amdgpu DDX 为通过条件，其显示集成路径与独立
+Xorg 不同。若仅独立 Xorg 退出时触发 `ttm_bo_release`，即可进一步
+收窄范围。完整往返与 Xwayland 当前是验收项，不预设必须改代码。
+
+**下一轮顺序**：先完成 greeter 登录/注销完整往返，再做 Xwayland
+和 IRQ 生命周期验收；`ttm_bo_release` 仅在复现时抓取；启动期
+fbcon pin 失败已用 fbdev 关闭规避；保留 0015/0016 基线。
 
 ## 9. 后续方案：小窗口下的显存访问与 GTT 中转
 
 本节为后续优化设计与验证计划。**当前桌面已经可用**（用户态 BO 走
 GTT，scanout/fbdev 留在 VRAM），因此本节不是阻塞项；只有需要在
 CPU 侧直接读写 VRAM，或做完整的 GTT staging/scanout 中转时才需要
-继续。第 3.1 节保留原始计划，当前修复顺序以第 8.11 节为准。
+继续。第 3.1 节保留原始计划，当前修复顺序以第 8.12 节为准。
 
 ### 9.1 56 MiB 限制的是 CPU 可见范围
 
@@ -953,7 +1042,7 @@ fence 和显示更新，避免 CPU 改写 GPU 正在读取的 staging 或显示
 
 ### 9.4 后续调查项（非当前阻塞）
 
-当前执行顺序见第 8.11 节。补丁 0011–0014 已整理并验证可顺序应用，
+当前执行顺序见第 8.12 节。补丁 0011–0014 已整理并验证可顺序应用，
 旧版“本地仅有两份源码、先复现整机失联”的计划已被后续记录取代。
 
 - **TLB 与 DMA 完成语义：** PASID flush 回调已补；response 完成
@@ -971,14 +1060,17 @@ fence 和显示更新，避免 CPU 改写 GPU 正在读取的 staging 或显示
 
 ## 10. TODO
 
-按第 8.11 节的顺序推进：
+按第 8.12 节的顺序推进：
 
 - **GDM greeter EGL（已修复）**：根因是 greeter 的 PAM 环境注入
   面向 SoC 显示栈的兼容库；去除后 greeter 以 Wayland 启动。详见
   [scanout_bo_pin_zh.md](scanout_bo_pin_zh.md)。
-- **BO 生命周期**：`ttm_bo_unpin` 下溢已由补丁 0016 修复；
-  用户会话启动时的非致命 `pin failed` 和 X11 客户端退出时的
-  `ttm_bo_release` 告警仍待清理；核实 pinned fault 返回语义。
+- **BO 生命周期**：0016 已避免零计数 unpin；启动期 `pin failed`
+  已定位为 4K fbcon 并用 `drm_kms_helper.fbdev_emulation=0` 规避；
+  `ttm_bo_release` 近期未复现，保留 X11/DDX 观察项；核实 pinned
+  fault 返回语义。
+- **完整往返**：greeter 登录 Wayland、运行应用、注销回 greeter、
+  再登录；确认硬件 EGL、输入、输出和资源释放。
 - **IRQ 生命周期**：保留 0015 基线，验证输出关闭、DPMS、VT 切换
   和 compositor 退出，统一补丁的原因说明。
 - **Xwayland 使用**：随后在 GNOME Wayland 下运行 X11 应用，验证
